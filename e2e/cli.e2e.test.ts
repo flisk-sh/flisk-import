@@ -49,19 +49,19 @@ describe("tdk-import (built CLI)", () => {
     expect(manifest("api")).toMatchObject({
       appType: "bring-your-own",
       stack: "shop",
-      dependsOn: ["db"],
+      dependsOn: ["db-svc"],
       buildContext: "../../../api",
       dockerfile: "Dockerfile",
-      port: 4000,
+      port: 4001,
       healthCheckPath: "/health",
     });
     // A "worker" ignores `image`; only bring-your-own runs the Compose image.
-    expect(manifest("db")).toMatchObject({
+    expect(manifest("db-svc")).toMatchObject({
       appType: "bring-your-own",
       image: "postgres:16",
       exposeViaProxy: false,
     });
-    expect(manifest("db")).not.toHaveProperty("healthCheckPath");
+    expect(manifest("db-svc")).not.toHaveProperty("healthCheckPath");
     expect(r.out).toContain("Next:");
     expect(r.out).toContain("shop/.env; values in docker-compose.yml were not copied");
     expect(r.out).toContain("Run `tdk up` with TDK core 1.3.145 or later");

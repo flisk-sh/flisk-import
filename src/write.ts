@@ -130,17 +130,9 @@ export function planWrites(plan: ImportPlan, force: boolean): WritePlan {
     if (status === "exists") {
       // Never written, so no port is needed; keep the one on disk for the plan.
       port = existingPort(path) ?? BYO_PORT_RANGE.min;
-    } else if (
-      service.port !== undefined &&
-      service.port >= MIN_SERVICE_PORT &&
-      service.port <= 65535
-    ) {
-      // The image already listens here; renumbering would need the app to read PORT.
+    } else if (service.port !== undefined && free(service.port)) {
+      // The schema accepts this port for bring-your-own and no other service in the project uses it.
       port = service.port;
-      if (port < BYO_PORT_RANGE.min || port > BYO_PORT_RANGE.max)
-        notes.push(
-          `port ${port} kept from Compose; it is outside TDK's usual ${BYO_PORT_RANGE.label}, so TDK may warn about the range`,
-        );
     } else if (keep !== undefined && free(keep)) {
       port = keep;
     } else {
@@ -152,7 +144,7 @@ export function planWrites(plan: ImportPlan, force: boolean): WritePlan {
       }
       if (service.port !== undefined && port !== undefined)
         notes.push(
-          `Compose port ${service.port} is below ${MIN_SERVICE_PORT}, which TDK does not accept; assigned ${port}. The container must listen on $PORT (${port}) or it will not answer`,
+          `Compose port ${service.port} is outside ${BYO_PORT_RANGE.label} or already used; assigned ${port}. The container must listen on $PORT (${port}) or it will not answer`,
         );
     }
     if (port === undefined) {

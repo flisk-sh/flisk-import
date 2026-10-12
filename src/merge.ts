@@ -33,10 +33,15 @@ export interface MergeResult {
 }
 
 export function toResourceName(raw: string): string {
-  return raw
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "");
+  let name =
+    raw
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "") || "svc";
+  // Resource names must start with a letter and be at least 3 characters (service schema).
+  if (!/^[a-z]/.test(name)) name = `svc-${name}`;
+  if (name.length < 3) name = `${name}-svc`;
+  return name;
 }
 
 const SCALAR_FIELDS = [

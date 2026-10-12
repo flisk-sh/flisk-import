@@ -52,13 +52,13 @@ describe("root Compose import", () => {
     });
     const plan = buildPlan(root);
     expect(plan.files).toEqual(["docker-compose.yml"]);
-    expect(plan.services.map((s) => s.name).sort()).toEqual(["api", "db"]);
+    expect(plan.services.map((s) => s.name).sort()).toEqual(["api", "db-svc"]);
     expect(plan.services.find((s) => s.name === "api")).toMatchObject({
       dir: "api",
       dockerfile: "Dockerfile",
       port: 4000,
       healthCheckPath: "/health",
-      dependsOn: ["db"],
+      dependsOn: ["db-svc"],
     });
     expect(plan.services.map((s) => s.name)).not.toContain("ignored");
   });
@@ -74,13 +74,13 @@ describe("root Compose import", () => {
 
     applyWrites(writes);
     const api = JSON.parse(readFileSync(serviceJson("api"), "utf8"));
-    const db = JSON.parse(readFileSync(serviceJson("db"), "utf8"));
+    const db = JSON.parse(readFileSync(serviceJson("db-svc"), "utf8"));
     expect(api).toMatchObject({
       stack: "shop",
       appType: "bring-your-own",
       port: 4000,
       healthCheckPath: "/health",
-      dependsOn: ["db"],
+      dependsOn: ["db-svc"],
       buildContext: "../../../api",
       dockerfile: "Dockerfile",
     });
@@ -140,19 +140,21 @@ describe("Compose values TDK cannot take as they are", () => {
     return { p, writes, manifest, text: formatPlan(p, writes) };
   };
 
-  it("routes an HTTP service on 8080 and keeps the port", () => {
+  it("routes an HTTP service on 8080 and assigns an in-range port", () => {
     const { manifest, text } = plan(
       "services:\n  web:\n    image: example/web:1\n    ports: ['80:8080']\n",
     );
     expect(manifest("web")).toMatchObject({
       appType: "bring-your-own",
-      port: 8080,
+      port: 4000,
       healthCheckPath: "/",
     });
     expect(manifest("web")).not.toHaveProperty("exposeViaProxy");
     expect(text).toContain("proxy:     routed through Traefik");
     expect(text).toContain("health:    / (assumed)");
-    expect(text).toContain("port 8080 kept from Compose; it is outside TDK's usual 4000-5999");
+    expect(text).toContain(
+      "Compose port 8080 is outside 4000-5999 or already used; assigned 4000. The container must listen on $PORT (4000)",
+    );
   });
 
   it("assigns a port for a privileged Compose port and says the container must read PORT", () => {
@@ -161,7 +163,7 @@ describe("Compose values TDK cannot take as they are", () => {
     );
     expect(manifest("web").port).toBe(4000);
     expect(text).toContain(
-      "Compose port 80 is below 1024, which TDK does not accept; assigned 4000",
+      "Compose port 80 is outside 4000-5999 or already used; assigned 4000. The container must listen on $PORT (4000)",
     );
   });
 
@@ -191,9 +193,9 @@ describe("Compose values TDK cannot take as they are", () => {
       ].join("\n"),
     );
     expect(writes.items.map((i) => i.service.name)).toEqual(["api"]);
-    expect(writes.rejected[0]).toMatchObject({ name: "db" });
+    expect(writes.rejected[0]).toMatchObject({ name: "db-svc" });
     expect(text).toContain(
-      'not written: db: image "postgres:${PG_VERSION:-16}" uses Compose variables',
+      'not written: db-svc: image "postgres:${PG_VERSION:-16}" uses Compose variables',
     );
     expect(manifest("api")).not.toHaveProperty("dependsOn");
     expect(text).toContain("dependsOn not written, not in this import: db");
@@ -261,7 +263,7 @@ describe("health path for non-HTTP services", () => {
     const plan = buildPlan(root);
     applyWrites(planWrites(plan, false));
     const api = JSON.parse(readFileSync(serviceJson("api"), "utf8"));
-    const db = JSON.parse(readFileSync(serviceJson("db"), "utf8"));
+    const db = JSON.parse(readFileSync(serviceJson("db-svc"), "utf8"));
     expect(api.healthCheckPath).toBe("/health");
     expect(db).not.toHaveProperty("healthCheckPath");
   });
