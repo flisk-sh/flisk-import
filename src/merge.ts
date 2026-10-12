@@ -32,16 +32,41 @@ export interface MergeResult {
   skips: Skip[];
 }
 
+function slug(raw: string): string {
+  return raw
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+}
+
 export function toResourceName(raw: string): string {
-  let name =
-    raw
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, "-")
-      .replace(/^-+|-+$/g, "") || "svc";
+  let name = slug(raw) || "svc";
   // Resource names must start with a letter and be at least 3 characters (service schema).
   if (!/^[a-z]/.test(name)) name = `svc-${name}`;
   if (name.length < 3) name = `${name}-svc`;
   return name;
+}
+
+/**
+ * Maps every raw name in one project to a distinct resource name. Names that are already valid
+ * claim their spelling first; the rest get a numeric suffix when they would collide (for example
+ * `db` and `db-svc` both normalise to `db-svc`).
+ */
+export function assignResourceNames(rawNames: string[]): Map<string, string> {
+  const unique = [...new Set(rawNames)].sort();
+  const claimed = new Set<string>();
+  const out = new Map<string, string>();
+  const claim = (raw: string) => {
+    const base = toResourceName(raw);
+    let final = base;
+    for (let n = 2; claimed.has(final); n++) final = `${base}-${n}`;
+    claimed.add(final);
+    out.set(raw, final);
+  };
+  const isValid = (raw: string) => toResourceName(raw) === raw;
+  unique.filter(isValid).forEach(claim);
+  unique.filter((raw) => !isValid(raw)).forEach(claim);
+  return out;
 }
 
 const SCALAR_FIELDS = [
@@ -57,14 +82,19 @@ function rank(candidate: Candidate): number {
   return Math.min(...candidate.sources.map((s) => precedence(s.detector)));
 }
 
-function mergeGroup(name: string, dir: string, members: Candidate[]): MergedService {
+function mergeGroup(
+  name: string,
+  dir: string,
+  members: Candidate[],
+  resolve: (raw: string) => string,
+): MergedService {
   const ordered = [...members].sort((a, b) => rank(a) - rank(b));
   const merged: MergedService = {
     name,
     dir,
     kind: (ordered[0] as Candidate).kind,
     envKeys: [...new Set(ordered.flatMap((c) => c.envKeys ?? []))].sort(),
-    dependsOn: [...new Set(ordered.flatMap((c) => (c.dependsOn ?? []).map(toResourceName)))].sort(),
+    dependsOn: [...new Set(ordered.flatMap((c) => (c.dependsOn ?? []).map(resolve)))].sort(),
     exposeViaProxy: ordered.find((c) => c.exposeViaProxy !== undefined)?.exposeViaProxy,
     procfileCommands: ordered.flatMap((c) =>
       c.sources.some((source) => source.detector === "procfile") && c.command ? [c.command] : [],
@@ -107,12 +137,18 @@ function mergeGroup(name: string, dir: string, members: Candidate[]): MergedServ
  */
 export function mergeCandidates(candidates: Candidate[], rootName: string): MergeResult {
   const skips: Skip[] = [];
+  const table = assignResourceNames([
+    ...candidates.flatMap((c) => (c.name === undefined ? [] : [c.name])),
+    ...candidates.flatMap((c) => c.dependsOn ?? []),
+    ...candidates.flatMap((c) => (c.name === undefined ? [basename(c.dir) || rootName] : [])),
+  ]);
+  const resolve = (raw: string) => table.get(raw) ?? toResourceName(raw);
   const groups = new Map<string, { name: string; dir: string; members: Candidate[] }>();
   const keyOf = (dir: string, name: string) => `${dir}\0${name}`;
 
   for (const c of candidates) {
     if (c.name === undefined) continue;
-    const name = toResourceName(c.name);
+    const name = resolve(c.name);
     const first = c.sources[0] as Source;
     if (!name) {
       skips.push({ ...first, reason: `"${c.name}" is not usable as a service name` });
@@ -132,7 +168,7 @@ export function mergeCandidates(candidates: Candidate[], rootName: string): Merg
     if (targets.length === 1) {
       (targets[0] as { members: Candidate[] }).members.push(c);
     } else if (targets.length === 0) {
-      const name = toResourceName(basename(c.dir) || rootName);
+      const name = resolve(basename(c.dir) || rootName);
       if (!name) {
         skips.push({
           ...(c.sources[0] as Source),
@@ -154,7 +190,7 @@ export function mergeCandidates(candidates: Candidate[], rootName: string): Merg
   }
 
   const services = [...groups.values()]
-    .map((g) => mergeGroup(g.name, g.dir, g.members))
+    .map((g) => mergeGroup(g.name, g.dir, g.members, resolve))
     .sort((a, b) => (a.dir === b.dir ? (a.name < b.name ? -1 : 1) : a.dir < b.dir ? -1 : 1));
   return { services, skips };
 }

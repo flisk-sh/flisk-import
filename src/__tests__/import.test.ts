@@ -268,3 +268,26 @@ describe("health path for non-HTTP services", () => {
     expect(db).not.toHaveProperty("healthCheckPath");
   });
 });
+
+describe("service names that normalise to the same value", () => {
+  it("keeps a service named db-svc separate from one named db", () => {
+    tree({
+      "docker-compose.yml": [
+        "services:",
+        "  db:",
+        "    image: postgres:16",
+        "  db-svc:",
+        "    image: redis:7",
+        "  api:",
+        "    image: example/api:1",
+        "    depends_on: [db, db-svc]",
+        "",
+      ].join("\n"),
+    });
+    const plan = buildPlan(root);
+    const names = plan.services.map((s) => s.name).sort();
+    expect(names).toEqual(["api", "db-svc", "db-svc-2"]);
+    const api = plan.services.find((s) => s.name === "api");
+    expect(api?.dependsOn.sort()).toEqual(["db-svc", "db-svc-2"]);
+  });
+});

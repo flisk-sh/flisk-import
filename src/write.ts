@@ -142,11 +142,16 @@ export function planWrites(plan: ImportPlan, force: boolean): WritePlan {
           break;
         }
       }
-      if (service.port !== undefined && port !== undefined)
-        notes.push(
-          `Compose port ${service.port} is outside ${BYO_PORT_RANGE.label} or already used; assigned ${port}. The container must listen on $PORT (${port}) or it will not answer`,
-        );
     }
+    if (
+      status !== "exists" &&
+      service.port !== undefined &&
+      port !== undefined &&
+      port !== service.port
+    )
+      notes.push(
+        `Compose port ${service.port} is outside ${BYO_PORT_RANGE.label} or already used; assigned ${port}. The container must listen on $PORT (${port}) or it will not answer`,
+      );
     if (port === undefined) {
       rejected.push({ name: service.name, reason: `no free port in ${BYO_PORT_RANGE.label}` });
       continue;
