@@ -131,7 +131,12 @@ registerDetector({
         const build = isObj(raw.build) ? raw.build : { context: raw.build };
         const context = typeof build.context === "string" ? build.context : ".";
         const resolved = normalize(join(composeDir, context));
-        if (isAbsolute(context) || context.includes("://") || resolved.startsWith("..")) {
+        if (
+          isAbsolute(context) ||
+          context.includes("://") ||
+          resolved === ".." ||
+          resolved.startsWith("../")
+        ) {
           skips.push({
             ...base,
             reason: `service "${name}" build context "${context}" is outside the imported directory; not imported`,

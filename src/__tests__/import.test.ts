@@ -241,6 +241,38 @@ describe("Compose values TDK cannot take as they are", () => {
     );
     expect(existsSync(join(root, "services", "shop", "api"))).toBe(false);
   });
+
+  it("imports a build context whose directory name starts with two dots while rejecting .. and ../shared", () => {
+    tree({ "..cache/Dockerfile": "FROM busybox\n" });
+    const { p, manifest, text } = plan(
+      [
+        "services:",
+        "  api:",
+        "    build: ./..cache",
+        "    ports: ['3000:3000']",
+        "  outside:",
+        "    build: ../shared",
+        "  parent:",
+        "    build: ..",
+      ].join("\n"),
+    );
+    expect(p.services.map((s) => s.name)).toEqual(["api"]);
+    expect(p.services[0]).toMatchObject({
+      name: "api",
+      dir: "..cache",
+      dockerfile: "Dockerfile",
+    });
+    expect(manifest("api")).toMatchObject({
+      buildContext: "../../../..cache",
+      dockerfile: "Dockerfile",
+    });
+    expect(text).toContain(
+      'service "outside" build context "../shared" is outside the imported directory; not imported',
+    );
+    expect(text).toContain(
+      'service "parent" build context ".." is outside the imported directory; not imported',
+    );
+  });
 });
 
 describe("health path for non-HTTP services", () => {
