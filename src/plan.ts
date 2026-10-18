@@ -4,7 +4,9 @@ import "./detectors/index.js";
 import { ImportError } from "./errors.js";
 import { type MergedService, mergeCandidates } from "./merge.js";
 import { selectDetectors } from "./registry.js";
+import { scanTree } from "./scan.js";
 import type { Candidate, Skip } from "./types.js";
+import { findUnsupported } from "./unsupported.js";
 
 export interface ImportPlan {
   root: string;
@@ -82,13 +84,14 @@ export function buildPlan(dir: string): ImportPlan {
     }
   }
 
+  const unsupported = findUnsupported(scanTree(root).files);
   const merged = mergeCandidates(candidates, basename(root));
   const services = merged.services;
   return {
     root,
     services,
-    skips: [...skips, ...merged.skips],
-    unsupported: [],
+    skips: [...skips, ...merged.skips, ...unsupported.skips],
+    unsupported: unsupported.labels,
     skippedProcfileProcesses: 0,
     notes: [],
     files: [composePath],

@@ -128,6 +128,23 @@ describe("root Compose import", () => {
     expect(text).toContain("compose.yaml [compose]: not read; `docker compose` prefers it");
     expect(text).not.toContain("other");
   });
+
+  it("reports Helm Chart.yaml and both kustomization.yaml and kustomization.yml as unsupported skips", () => {
+    tree({
+      "docker-compose.yml": compose,
+      "Chart.yaml": "apiVersion: v2\n",
+      "kustomization.yaml": "kind: Kustomization\n",
+      "overlays/dev/kustomization.yml": "kind: Kustomization\n",
+    });
+    const plan = buildPlan(root);
+    expect(plan.unsupported).toEqual(["Helm", "Kustomize"]);
+    const text = formatPlan(plan, planWrites(plan, false));
+    expect(text).toContain("Chart.yaml [unsupported]: Helm is not imported");
+    expect(text).toContain("kustomization.yaml [unsupported]: Kustomize is not imported");
+    expect(text).toContain(
+      "overlays/dev/kustomization.yml [unsupported]: Kustomize is not imported",
+    );
+  });
 });
 
 describe("Compose values TDK cannot take as they are", () => {
