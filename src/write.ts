@@ -174,7 +174,7 @@ export function planWrites(plan: ImportPlan, force: boolean): WritePlan {
       notes.push("no health path: the service does not serve HTTP (non-HTTP image or job)");
     if (!isPrivate && !nonHttp && !service.healthCheckPath)
       notes.push(
-        "health path / is assumed: Compose has no HTTP healthcheck URL. Traefik routes only while it answers 2xx or 3xx",
+        "health path / is assumed: no HTTP health path could be read from Compose. Traefik routes only while it answers 2xx or 3xx",
       );
     if (service.envKeys.length)
       notes.push("environment values are not written; put them in the project .env");

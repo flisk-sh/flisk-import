@@ -58,10 +58,13 @@ function healthPathOf(healthcheck: unknown): string | undefined {
   const test = healthcheck.test
     .filter((part): part is string => typeof part === "string")
     .join(" ");
-  const match = test.match(/https?:\/\/[^\s"']+(\/[^\s"']*)?/i);
+  const match = test.match(
+    /(?:https?:\/\/[^\s"'/]+|(?:^|(?<=[\s"']))(?:[a-z0-9.-]+:\d+|localhost|127\.0\.0\.1))(\/[^\s"']*)/i,
+  );
   if (!match) return undefined;
   try {
-    return new URL(match[0]).pathname || "/";
+    const raw = match[0];
+    return new URL(/^https?:\/\//i.test(raw) ? raw : `http://${raw}`).pathname || "/";
   } catch {
     return undefined;
   }

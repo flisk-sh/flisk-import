@@ -236,6 +236,39 @@ describe("Compose values TDK cannot take as they are", () => {
     expect(text).toContain('health path "/health_check" has characters TDK does not accept');
   });
 
+  it("reads scheme-less host:port/path and localhost/path healthchecks and notes when no path can be read", () => {
+    const { manifest, text } = plan(
+      [
+        "services:",
+        "  web:",
+        "    image: nginx:1",
+        "    ports: ['8080:80']",
+        "    healthcheck:",
+        "      test: ['CMD', 'curl', '-f', 'localhost:80/health']",
+        "  api:",
+        "    image: example/api:1",
+        "    ports: ['4001:4001']",
+        "    healthcheck:",
+        "      test: ['CMD', 'curl', '-f', 'localhost/ready']",
+        "  bare:",
+        "    image: example/bare:1",
+        "    ports: ['4002:4002']",
+        "    healthcheck:",
+        "      test: ['CMD', 'curl', '-f', 'localhost:4002']",
+      ].join("\n"),
+    );
+    expect(manifest("web").healthCheckPath).toBe("/health");
+    expect(manifest("api").healthCheckPath).toBe("/ready");
+    expect(manifest("bare").healthCheckPath).toBe("/");
+    expect(text).toContain("    health:    /health\n");
+    expect(text).toContain("    health:    /ready\n");
+    expect(text).toContain("    health:    / (assumed)\n");
+    expect(text).toContain(
+      "health path / is assumed: no HTTP health path could be read from Compose",
+    );
+    expect(text).not.toContain("Compose has no HTTP healthcheck URL");
+  });
+
   it("names every Compose key that is not translated", () => {
     const { text } = plan(
       [
