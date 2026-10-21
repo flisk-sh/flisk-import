@@ -138,13 +138,29 @@ jobs:
           fi
           # No NODE_AUTH_TOKEN: npm exchanges this workflow's OIDC identity for a short-lived
           # publish token, and attaches a provenance attestation for the public package.
-          if ! npm publish "$PACKAGE_TARBALL" --access public --provenance 2>&1 | tee "$RUNNER_TEMP/publish.log"; then
+          set +e
+          npm publish "$PACKAGE_TARBALL" --access public --provenance 2>&1 | tee "$RUNNER_TEMP/publish.log"
+          publish_status=${PIPESTATUS[0]}
+          set -e
+          # npm reads the package back after the upload to attach the provenance attestation, and the
+          # registry can still 404 that read while the new version propagates. The version becoming
+          # visible is the source of truth, so wait for it before calling the publish a failure.
+          for _ in $(seq 1 30); do
+            if npm view "flisk-import@$PACKAGE_VERSION" version >/dev/null 2>&1; then
+              echo "flisk-import@$PACKAGE_VERSION is on the registry."
+              exit 0
+            fi
+            sleep 10
+          done
+          if [ "$publish_status" -ne 0 ]; then
             echo "::error::npm publication failed for version $PACKAGE_VERSION."
             if grep -qi "trusted publisher" "$RUNNER_TEMP/publish.log"; then
               echo "::error::npm has no trusted publisher for flisk-import pointing at flisk-sh/flisk-import and workflow publish-npm.yml. Configure it on npmjs.com, then rerun this workflow."
             fi
             exit 1
           fi
+          echo "::error::flisk-import@$PACKAGE_VERSION was published but did not become visible within 5 minutes."
+          exit 1
 
       # The same archive under the organization scope. The scoped name is a second publication of
       # the same bytes, not a second build.
@@ -200,13 +216,28 @@ jobs:
             echo "@flisk-sh/flisk-import@$PACKAGE_VERSION is already published to npm, skipping."
             exit 0
           fi
-          if ! npm publish "$PACKAGE_TARBALL" --access public --provenance 2>&1 | tee "$RUNNER_TEMP/publish-scoped.log"; then
+          set +e
+          npm publish "$PACKAGE_TARBALL" --access public --provenance 2>&1 | tee "$RUNNER_TEMP/publish-scoped.log"
+          publish_status=${PIPESTATUS[0]}
+          set -e
+          # The registry can still 404 the read-back npm does after the upload, while the new
+          # version propagates. The version becoming visible is the source of truth.
+          for _ in $(seq 1 30); do
+            if npm view "@flisk-sh/flisk-import@$PACKAGE_VERSION" version >/dev/null 2>&1; then
+              echo "@flisk-sh/flisk-import@$PACKAGE_VERSION is on the registry."
+              exit 0
+            fi
+            sleep 10
+          done
+          if [ "$publish_status" -ne 0 ]; then
             echo "::error::npm publication failed for @flisk-sh/flisk-import version $PACKAGE_VERSION."
             if grep -qi "trusted publisher" "$RUNNER_TEMP/publish-scoped.log"; then
               echo "::error::npm has no trusted publisher for @flisk-sh/flisk-import pointing at flisk-sh/flisk-import and workflow publish-npm.yml. Configure it on npmjs.com, then rerun this workflow."
             fi
             exit 1
           fi
+          echo "::error::@flisk-sh/flisk-import@$PACKAGE_VERSION was published but did not become visible within 5 minutes."
+          exit 1
 
       - name: Retain package archive for release recovery
         if: always() && steps.package.outputs.tarball != ''
