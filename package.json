@@ -1,7 +1,7 @@
 {
   "name": "flisk-import",
-  "version": "0.2.3",
-  "description": "Import services from a repository's root docker-compose.yml into TDK service.json files.",
+  "version": "0.2.4",
+  "description": "Import services from a repository's root docker-compose.yml into Flisk service.json files.",
   "type": "module",
   "license": "MIT",
   "bin": {
