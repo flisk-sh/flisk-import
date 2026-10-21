@@ -4,9 +4,14 @@ name: Publish flisk-import to npm
 # (OIDC): no long-lived npm token lives in this repo, and the publish is attested with
 # provenance that names this repository's workflow and source.
 #
+# The package is published under two names: the unscoped "flisk-import" and the scoped
+# "@flisk-sh/flisk-import". A package has exactly one name in its package.json, so the
+# second name is the same archive with the name rewritten in the packed manifest.
+#
 # Owner setup required before the first publish succeeds: npmjs.com -> Packages -> flisk-import
 # -> Settings -> Trusted Publisher -> GitHub Actions -> organization "flisk-sh", repository
-# "flisk-import", workflow filename "publish-npm.yml", allowed action "npm publish".
+# "flisk-import", workflow filename "publish-npm.yml", allowed action "npm publish". The same
+# configuration is needed for "@flisk-sh/flisk-import" once that package exists.
 # A package's first version cannot be published through OIDC, so version 0.2.2 (or later) has
 # to be published once with an npm token before the trusted publisher can take over.
 on:
@@ -107,6 +112,58 @@ jobs:
             echo "::error::npm publication failed for version $PACKAGE_VERSION."
             if grep -qi "trusted publisher" "$RUNNER_TEMP/publish.log"; then
               echo "::error::npm has no trusted publisher for flisk-import pointing at flisk-sh/flisk-import and workflow publish-npm.yml. Configure it on npmjs.com, then rerun this workflow."
+            fi
+            exit 1
+          fi
+
+      # The same archive under the organization scope. The scoped name is a second publication of
+      # the same bytes, not a second build.
+      - name: Build the scoped archive
+        id: scoped
+        env:
+          PACKAGE_TARBALL: ${{ steps.package.outputs.tarball }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          work_dir="$RUNNER_TEMP/scoped-package"
+          mkdir -p "$work_dir"
+          tar -xzf "$PACKAGE_TARBALL" -C "$work_dir"
+          node --input-type=module - "$work_dir/package/package.json" <<'NODE'
+          import fs from 'node:fs';
+          const manifestPath = process.argv[2];
+          const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+          if (manifest.name !== 'flisk-import') {
+            throw new Error(`Unexpected package name: ${manifest.name}`);
+          }
+          // Only the name changes: the bin entries, the version and the contents stay the ones the
+          // unscoped package was published with.
+          manifest.name = '@flisk-sh/flisk-import';
+          fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+          NODE
+          # --ignore-scripts: the archive already carries the built CLI, and the build script is
+          # not part of the published files.
+          scoped_tarball="$(cd "$work_dir/package" && npm pack --ignore-scripts --pack-destination "$work_dir" --silent)"
+          if [[ ! -f "$work_dir/$scoped_tarball" ]]; then
+            echo "::error::npm pack did not produce the scoped archive."
+            exit 1
+          fi
+          echo "tarball=$work_dir/$scoped_tarball" >> "$GITHUB_OUTPUT"
+
+      - name: Publish the scoped package to npm
+        env:
+          PACKAGE_TARBALL: ${{ steps.scoped.outputs.tarball }}
+          PACKAGE_VERSION: ${{ steps.package.outputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if npm view "@flisk-sh/flisk-import@$PACKAGE_VERSION" version >/dev/null 2>&1; then
+            echo "@flisk-sh/flisk-import@$PACKAGE_VERSION is already published to npm, skipping."
+            exit 0
+          fi
+          if ! npm publish "$PACKAGE_TARBALL" --access public --provenance 2>&1 | tee "$RUNNER_TEMP/publish-scoped.log"; then
+            echo "::error::npm publication failed for @flisk-sh/flisk-import version $PACKAGE_VERSION."
+            if grep -qi "trusted publisher" "$RUNNER_TEMP/publish-scoped.log"; then
+              echo "::error::npm has no trusted publisher for @flisk-sh/flisk-import pointing at flisk-sh/flisk-import and workflow publish-npm.yml. Configure it on npmjs.com, then rerun this workflow."
             fi
             exit 1
           fi
