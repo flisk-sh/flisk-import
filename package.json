@@ -13,7 +13,7 @@
   ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/tdk-landscape/tdk-import.git"
+    "url": "git+https://github.com/flisk-sh/flisk-import.git"
   },
   "engines": {
     "node": ">=22.12.0"
@@ -38,8 +38,8 @@
   "publishConfig": {
     "access": "public"
   },
-  "homepage": "https://github.com/tdk-landscape/tdk-import#readme",
+  "homepage": "https://github.com/flisk-sh/flisk-import#readme",
   "bugs": {
-    "url": "https://github.com/tdk-landscape/tdk-import/issues"
+    "url": "https://github.com/flisk-sh/flisk-import/issues"
   }
 }

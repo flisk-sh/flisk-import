@@ -3,7 +3,7 @@ import { dirname, join, resolve } from "node:path";
 
 /** Manifest constants of the TDK service.json this tool writes. */
 export const SERVICE_MANIFEST_SCHEMA_VERSION = 1;
-export const SERVICE_MANIFEST_SCHEMA_URL = "https://tdk-landscape.github.io/schema.service.json";
+export const SERVICE_MANIFEST_SCHEMA_URL = "https://flisk.sh/schema.service.json";
 /**
  * Oldest TDK core that starts an imported project: 1.3.104 added `buildContext`, and 1.3.145
  * (tdk-cli-core#1018) bootstraps a project that has `.tdk/project.json` but no Tiltfile yet.
