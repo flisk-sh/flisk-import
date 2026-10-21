@@ -54,6 +54,9 @@ jobs:
           npm run lint
           npm run test
 
+      - name: Build the CLI
+        run: npm run build
+
       - name: Check release version and pack package
         id: package
         shell: bash
@@ -66,21 +69,26 @@ jobs:
             exit 1
           fi
 
+          # The archive is packed with --ignore-scripts: the build already ran in the step above, and
+          # the prepare script would otherwise print into the same stdout that carries npm's report.
           mkdir -p "$RUNNER_TEMP/flisk-import-package"
-          npm pack --json --pack-destination "$RUNNER_TEMP/flisk-import-package" > "$RUNNER_TEMP/flisk-import-pack.json"
-          tarball="$RUNNER_TEMP/flisk-import-package/$(node -p "JSON.parse(require('fs').readFileSync(process.env.RUNNER_TEMP + '/flisk-import-pack.json', 'utf8'))[0].filename")"
-          if [[ ! -f "$tarball" ]]; then
+          npm pack --ignore-scripts --pack-destination "$RUNNER_TEMP/flisk-import-package" --silent
+          tarball="$(find "$RUNNER_TEMP/flisk-import-package" -maxdepth 1 -name '*.tgz' -print -quit)"
+          if [[ -z "$tarball" || ! -f "$tarball" ]]; then
             echo "::error::npm pack did not produce the expected package archive."
             exit 1
           fi
 
-          node --input-type=module - "$RUNNER_TEMP/flisk-import-pack.json" <<'NODE'
+          # The archive itself is the source of truth for what gets published.
+          node --input-type=module - "$tarball" "$package_version" <<'NODE'
           import fs from 'node:fs';
-          const report = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'))[0];
-          if (report.name !== 'flisk-import') {
-            throw new Error(`Unexpected package name: ${report.name}`);
-          }
-          const files = new Set(report.files.map(({ path }) => path));
+          import { execFileSync } from 'node:child_process';
+          const tarball = process.argv[2];
+          const listing = execFileSync('tar', ['-tzf', tarball], { encoding: 'utf8' })
+            .split('\n')
+            .filter(Boolean)
+            .map((entry) => entry.replace(/^package\//, ''));
+          const files = new Set(listing);
           for (const required of ['package.json', 'README.md', 'dist/cli.js']) {
             if (!files.has(required)) throw new Error(`Package is missing required file: ${required}`);
           }
@@ -89,7 +97,16 @@ jobs:
               throw new Error(`Package contains excluded content: ${file}`);
             }
           }
-          console.log(`Validated ${report.filename} (${report.size} bytes)`);
+          const manifest = JSON.parse(
+            execFileSync('tar', ['-xzOf', tarball, 'package/package.json'], { encoding: 'utf8' }),
+          );
+          if (manifest.name !== 'flisk-import') {
+            throw new Error(`Unexpected package name: ${manifest.name}`);
+          }
+          if (manifest.version !== process.argv[3]) {
+            throw new Error(`Unexpected package version: ${manifest.version}`);
+          }
+          console.log(`Validated ${tarball} (${listing.length} files, version ${manifest.version})`);
           NODE
 
           echo "tarball=$tarball" >> "$GITHUB_OUTPUT"
