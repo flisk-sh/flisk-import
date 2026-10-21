@@ -39,7 +39,7 @@ The plan names each of these. Nothing below is guessed.
 ## Before `tdk up`
 
 1. Put the environment values the services need in the project `.env`. Values in `docker-compose.yml` were not copied.
-2. Use TDK core **1.3.145 or later**. 1.3.104 added `buildContext` ([tdk-cli-core#525](https://github.com/flisk-sh/flisk/pull/525)); 1.3.145 starts a project that has `.tdk/project.json` but no Tiltfile yet ([tdk-cli-core#1018](https://github.com/flisk-sh/flisk/pull/1018)). The importer does not check the installed version.
+2. Use TDK core **1.3.145 or later**. 1.3.104 added `buildContext` ([flisk#525](https://github.com/flisk-sh/flisk/pull/525)); 1.3.145 starts a project that has `.tdk/project.json` but no Tiltfile yet ([flisk#1018](https://github.com/flisk-sh/flisk/pull/1018)). The importer does not check the installed version.
 3. TDK injects its own `PORT`, `DATABASE_URL` and a `Host: <service>.<project>.localhost` header. An app that validates its host or reads `DATABASE_URL` may need configuration that Compose did not.
 
 The command exits 1 when nothing could be imported (an unreadable file, or every service skipped).

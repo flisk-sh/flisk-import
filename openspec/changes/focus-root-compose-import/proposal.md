@@ -1,6 +1,6 @@
 ## Why
 
-`import-repo` shipped a general framework: a directory walk, four detectors (Compose, Dockerfile, package.json, Procfile), and a merge between them. In practice the merge and the unsupported-infrastructure safeguards were the expensive, least-verified part, and only the Compose path was checked against a real public repo. The first tier of tdk-cli-core#511 is the root `docker-compose.yml`, so this change narrows the importer to that one file and makes it produce a project `tdk up` can start.
+`import-repo` shipped a general framework: a directory walk, four detectors (Compose, Dockerfile, package.json, Procfile), and a merge between them. In practice the merge and the unsupported-infrastructure safeguards were the expensive, least-verified part, and only the Compose path was checked against a real public repo. The first tier of flisk#511 is the root `docker-compose.yml`, so this change narrows the importer to that one file and makes it produce a project `tdk up` can start.
 
 ## What Changes
 
@@ -27,4 +27,4 @@ None.
 - `src/cli.ts`, `src/plan.ts`, `src/write.ts`, `src/merge.ts`, `src/detectors/compose.ts`, `src/detectors/index.ts`, `src/format.ts`, `src/types.ts`.
 - Dockerfile, package.json, and Procfile detectors are no longer registered. Their code and the `import-repo` tasks that built them remain history; re-adding one is a later change against the same registry.
 - Docs: `README.md` and `docs/import.md` rewritten for the narrow scope.
-- Related: tdk-cli-core#511 (umbrella). The PR stays a draft until the core bootstrap problem (`.tdk/.tdk-out/Tiltfile` missing after `tdk up`) is fixed and two public repos run successfully.
+- Related: flisk#511 (umbrella). The PR stays a draft until the core bootstrap problem (`.tdk/.tdk-out/Tiltfile` missing after `tdk up`) is fixed and two public repos run successfully.

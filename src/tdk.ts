@@ -6,7 +6,7 @@ export const SERVICE_MANIFEST_SCHEMA_VERSION = 1;
 export const SERVICE_MANIFEST_SCHEMA_URL = "https://flisk.sh/schema.service.json";
 /**
  * Oldest TDK core that starts an imported project: 1.3.104 added `buildContext`, and 1.3.145
- * (tdk-cli-core#1018) bootstraps a project that has `.tdk/project.json` but no Tiltfile yet.
+ * (flisk#1018) bootstraps a project that has `.tdk/project.json` but no Tiltfile yet.
  * Stated, not checked: the importer does not read the installed core version.
  */
 export const MIN_CORE_VERSION = "1.3.145";
