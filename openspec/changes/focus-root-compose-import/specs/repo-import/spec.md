@@ -2,11 +2,11 @@
 
 ### Requirement: Import scans a tree and only runs registered detectors
 
-`tdk-import [dir]` SHALL read exactly `<dir>/docker-compose.yml` (default `dir` is `.`). It SHALL NOT walk subdirectories, read other Compose filenames, or read Dockerfile, `package.json`, or Procfile. The `compose` detector SHALL be the only registered detector, and there SHALL be no `--only` option. The command MUST NOT shell out to Helm, kustomize, or Docker Compose.
+`flisk-import [dir]` SHALL read exactly `<dir>/docker-compose.yml` (default `dir` is `.`). It SHALL NOT walk subdirectories, read other Compose filenames, or read Dockerfile, `package.json`, or Procfile. The `compose` detector SHALL be the only registered detector, and there SHALL be no `--only` option. The command MUST NOT shell out to Helm, kustomize, or Docker Compose.
 
 #### Scenario: Missing root Compose file fails closed
 
-- **WHEN** a user runs `tdk-import .` in a directory with no `docker-compose.yml`
+- **WHEN** a user runs `flisk-import .` in a directory with no `docker-compose.yml`
 - **THEN** the command exits non-zero
 - **AND** the error says that only the root `docker-compose.yml` is read
 - **AND** no file is written
@@ -32,7 +32,7 @@ The default SHALL print the plan and ask before writing. `--dry-run` SHALL write
 
 #### Scenario: Project config is created once
 
-- **WHEN** a user runs `tdk-import . --yes` in a repo with no `.tdk/project.json`
+- **WHEN** a user runs `flisk-import . --yes` in a repo with no `.tdk/project.json`
 - **THEN** `.tdk/project.json` is created with the imported stack enabled
 - **AND** a second run with `--force` leaves it unchanged
 

@@ -6,7 +6,7 @@ The unit is a directory. Detectors only claim files and emit candidates. Merge a
 
 ## What Changes
 
-- Add `tdk-import [dir]` (default `.`). It scans, detects, merges, prints a plan, and writes only after confirmation. `--dry-run` plans only. `--yes` writes without prompting. `--only <ids>` runs a subset of registered detectors. `--force` is required to overwrite an existing `service.json`.
+- Add `flisk-import [dir]` (default `.`). It scans, detects, merges, prints a plan, and writes only after confirmation. `--dry-run` plans only. `--yes` writes without prompting. `--only <ids>` runs a subset of registered detectors. `--force` is required to overwrite an existing `service.json`.
 - Add an importer registry. A detector claims files and emits candidates. It does not write `service.json` and does not know about other detectors.
 - Add a candidate model (service, resource, job) with provenance, confidence, and an explicit skip. Merge groups candidates by directory and name. Conflicts are listed, not guessed.
 - Ship three detectors that force the merge to be real: Compose, Dockerfile, `package.json` scripts. Procfile (#520) is the fourth, and the smallest, so a one-file importer can land without a schema.

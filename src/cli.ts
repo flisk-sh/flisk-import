@@ -23,7 +23,7 @@ async function confirm(message: string): Promise<boolean> {
   }
 }
 
-const program = new Command("tdk-import")
+const program = new Command("flisk-import")
   .version(JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")).version)
   .description("Import services from the root docker-compose.yml into TDK")
   .argument("[dir]", "Directory containing docker-compose.yml", ".")

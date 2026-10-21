@@ -12,7 +12,7 @@ import { planWrites } from "../write.js";
 let root: string;
 
 beforeEach(() => {
-  root = join(mkdtempSync(join(tmpdir(), "tdk-import-dockerfile-")), "app");
+  root = join(mkdtempSync(join(tmpdir(), "flisk-import-dockerfile-")), "app");
   mkdirSync(root, { recursive: true });
 });
 

@@ -15,7 +15,7 @@ export const BYO_PORT_RANGE = { min: 4000, max: 5999, label: "4000-5999" } as co
 
 /**
  * Values TDK copies into generated Compose and Traefik config must match these, or `tdk up` refuses
- * the manifest (tdk-cli-core `cli/src/utils/service-manifest.ts`, engine `manifest/parser.star`).
+ * the manifest (flisk `cli/src/utils/service-manifest.ts`, engine `manifest/parser.star`).
  */
 export const HEALTH_CHECK_PATH_PATTERN = /^\/[a-z0-9/-]*$/;
 export const IMAGE_PATTERN = /^[A-Za-z0-9._/:@-]+$/;

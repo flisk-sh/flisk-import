@@ -4,7 +4,7 @@
 
 ## What Changes
 
-- **BREAKING** `tdk-import` reads exactly `<dir>/docker-compose.yml`. It no longer walks the tree, honors `.gitignore`, or reads Dockerfile, `package.json`, or Procfile. A missing root file is an error that says so.
+- **BREAKING** `flisk-import` reads exactly `<dir>/docker-compose.yml`. It no longer walks the tree, honors `.gitignore`, or reads Dockerfile, `package.json`, or Procfile. A missing root file is an error that says so.
 - **BREAKING** Remove `--only`. Compose is the only active detector.
 - Compose detection additionally carries stack membership, `depends_on`, the original `build.context` and `build.dockerfile`, an HTTP health path from `healthcheck.test`, and whether the service should be exposed through the proxy.
 - Services on common non-HTTP ports (Postgres, MySQL, Redis, Mongo, RabbitMQ, Kafka, Elasticsearch, Memcached) are written as private bring-your-own services with no health path and no proxy route.

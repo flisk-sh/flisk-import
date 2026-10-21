@@ -1,0 +1,121 @@
+name: Publish flisk-import to npm
+
+# flisk-import is published to npmjs.org from this repository with npm's trusted publishing
+# (OIDC): no long-lived npm token lives in this repo, and the publish is attested with
+# provenance that names this repository's workflow and source.
+#
+# Owner setup required before the first publish succeeds: npmjs.com -> Packages -> flisk-import
+# -> Settings -> Trusted Publisher -> GitHub Actions -> organization "flisk-sh", repository
+# "flisk-import", workflow filename "publish-npm.yml", allowed action "npm publish".
+# A package's first version cannot be published through OIDC, so version 0.2.2 (or later) has
+# to be published once with an npm token before the trusted publisher can take over.
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: npm-publish-${{ github.event.release.tag_name }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      id-token: write # required for npm trusted publishing (OIDC)
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.release.tag_name }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.15.0
+          registry-url: https://registry.npmjs.org
+
+      # Trusted publishing needs npm CLI >= 11.5.1 and Node >= 22.14; the pinned CLI also
+      # supports managing dist-tags through OIDC.
+      - name: Install a trusted-publishing-capable npm CLI
+        run: npm install --global npm@12.2.0
+
+      - name: Install and verify
+        run: |
+          npm install
+          npm run typecheck
+          npm run lint
+          npm run test
+
+      - name: Check release version and pack package
+        id: package
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag_version="${GITHUB_REF_NAME#v}"
+          package_version="$(node -p "require('./package.json').version")"
+          if [[ "$tag_version" != "$package_version" ]]; then
+            echo "::error::Release tag version '$tag_version' does not match package version '$package_version'."
+            exit 1
+          fi
+
+          mkdir -p "$RUNNER_TEMP/flisk-import-package"
+          npm pack --json --pack-destination "$RUNNER_TEMP/flisk-import-package" > "$RUNNER_TEMP/flisk-import-pack.json"
+          tarball="$RUNNER_TEMP/flisk-import-package/$(node -p "JSON.parse(require('fs').readFileSync(process.env.RUNNER_TEMP + '/flisk-import-pack.json', 'utf8'))[0].filename")"
+          if [[ ! -f "$tarball" ]]; then
+            echo "::error::npm pack did not produce the expected package archive."
+            exit 1
+          fi
+
+          node --input-type=module - "$RUNNER_TEMP/flisk-import-pack.json" <<'NODE'
+          import fs from 'node:fs';
+          const report = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'))[0];
+          if (report.name !== 'flisk-import') {
+            throw new Error(`Unexpected package name: ${report.name}`);
+          }
+          const files = new Set(report.files.map(({ path }) => path));
+          for (const required of ['package.json', 'README.md', 'dist/cli.js']) {
+            if (!files.has(required)) throw new Error(`Package is missing required file: ${required}`);
+          }
+          for (const file of files) {
+            if (file.startsWith('node_modules/') || file.includes('/node_modules/') || file.startsWith('.git/')) {
+              throw new Error(`Package contains excluded content: ${file}`);
+            }
+          }
+          console.log(`Validated ${report.filename} (${report.size} bytes)`);
+          NODE
+
+          echo "tarball=$tarball" >> "$GITHUB_OUTPUT"
+          echo "version=$package_version" >> "$GITHUB_OUTPUT"
+
+      - name: Publish to npm
+        env:
+          PACKAGE_TARBALL: ${{ steps.package.outputs.tarball }}
+          PACKAGE_VERSION: ${{ steps.package.outputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if npm view "flisk-import@$PACKAGE_VERSION" version >/dev/null 2>&1; then
+            echo "flisk-import@$PACKAGE_VERSION is already published to npm, skipping."
+            exit 0
+          fi
+          # No NODE_AUTH_TOKEN: npm exchanges this workflow's OIDC identity for a short-lived
+          # publish token, and attaches a provenance attestation for the public package.
+          if ! npm publish "$PACKAGE_TARBALL" --access public --provenance 2>&1 | tee "$RUNNER_TEMP/publish.log"; then
+            echo "::error::npm publication failed for version $PACKAGE_VERSION."
+            if grep -qi "trusted publisher" "$RUNNER_TEMP/publish.log"; then
+              echo "::error::npm has no trusted publisher for flisk-import pointing at flisk-sh/flisk-import and workflow publish-npm.yml. Configure it on npmjs.com, then rerun this workflow."
+            fi
+            exit 1
+          fi
+
+      - name: Retain package archive for release recovery
+        if: always() && steps.package.outputs.tarball != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: flisk-import-package-${{ steps.package.outputs.version }}
+          path: ${{ steps.package.outputs.tarball }}
+          if-no-files-found: error
+          retention-days: 30

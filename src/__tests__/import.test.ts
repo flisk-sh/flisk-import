@@ -17,7 +17,7 @@ function tree(files: Record<string, string>): void {
 }
 
 beforeEach(() => {
-  root = join(mkdtempSync(join(tmpdir(), "tdk-import-")), "shop");
+  root = join(mkdtempSync(join(tmpdir(), "flisk-import-")), "shop");
   mkdirSync(root, { recursive: true });
 });
 afterEach(() => rmSync(dirname(root), { recursive: true, force: true }));

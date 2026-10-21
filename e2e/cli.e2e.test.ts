@@ -24,13 +24,13 @@ const manifest = (name: string) =>
   JSON.parse(readFileSync(join(repo, "services", "shop", name, "service.json"), "utf8"));
 
 beforeEach(() => {
-  work = mkdtempSync(join(tmpdir(), "tdk-import-e2e-"));
+  work = mkdtempSync(join(tmpdir(), "flisk-import-e2e-"));
   repo = join(work, "shop");
   cpSync(join(import.meta.dirname, "fixtures", "shop"), repo, { recursive: true });
 });
 afterEach(() => rmSync(work, { recursive: true, force: true }));
 
-describe("tdk-import (built CLI)", () => {
+describe("flisk-import (built CLI)", () => {
   it("--dry-run prints the root Compose plan and writes nothing", () => {
     const r = run(["shop", "--dry-run"]);
     expect(r.code).toBe(0);
