@@ -8,7 +8,7 @@ import { selectDetectors } from "../registry.js";
 let root: string;
 
 beforeEach(() => {
-  root = join(mkdtempSync(join(tmpdir(), "tdk-import-package-json-")), "app");
+  root = join(mkdtempSync(join(tmpdir(), "flisk-import-package-json-")), "app");
   mkdirSync(root, { recursive: true });
 });
 

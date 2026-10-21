@@ -3,10 +3,10 @@ import { dirname, join, resolve } from "node:path";
 
 /** Manifest constants of the TDK service.json this tool writes. */
 export const SERVICE_MANIFEST_SCHEMA_VERSION = 1;
-export const SERVICE_MANIFEST_SCHEMA_URL = "https://tdk-landscape.github.io/schema.service.json";
+export const SERVICE_MANIFEST_SCHEMA_URL = "https://flisk.sh/schema.service.json";
 /**
  * Oldest TDK core that starts an imported project: 1.3.104 added `buildContext`, and 1.3.145
- * (tdk-cli-core#1018) bootstraps a project that has `.tdk/project.json` but no Tiltfile yet.
+ * (flisk#1018) bootstraps a project that has `.tdk/project.json` but no Tiltfile yet.
  * Stated, not checked: the importer does not read the installed core version.
  */
 export const MIN_CORE_VERSION = "1.3.145";
@@ -15,7 +15,7 @@ export const BYO_PORT_RANGE = { min: 4000, max: 5999, label: "4000-5999" } as co
 
 /**
  * Values TDK copies into generated Compose and Traefik config must match these, or `tdk up` refuses
- * the manifest (tdk-cli-core `cli/src/utils/service-manifest.ts`, engine `manifest/parser.star`).
+ * the manifest (flisk `cli/src/utils/service-manifest.ts`, engine `manifest/parser.star`).
  */
 export const HEALTH_CHECK_PATH_PATTERN = /^\/[a-z0-9/-]*$/;
 export const IMAGE_PATTERN = /^[A-Za-z0-9._/:@-]+$/;

@@ -15,7 +15,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { EXPECTATIONS } from "./corpus/expectations.js";
 
 // Runs the built binary over every Compose file in e2e/corpus and checks what it wrote against what
-// TDK accepts (tdk-cli-core cli/src/utils/service-manifest.ts) and against that fixture's expectations.
+// TDK accepts (flisk cli/src/utils/service-manifest.ts) and against that fixture's expectations.
 const CLI = join(import.meta.dirname, "..", "dist", "cli.js");
 const CORPUS = join(import.meta.dirname, "corpus");
 const HEALTH_PATH = /^\/[a-z0-9/-]*$/;
@@ -24,7 +24,7 @@ const names = readdirSync(CORPUS).filter((n) => statSync(join(CORPUS, n)).isDire
 
 let work: string;
 beforeEach(() => {
-  work = mkdtempSync(join(tmpdir(), "tdk-import-corpus-"));
+  work = mkdtempSync(join(tmpdir(), "flisk-import-corpus-"));
 });
 afterEach(() => rmSync(work, { recursive: true, force: true }));
 

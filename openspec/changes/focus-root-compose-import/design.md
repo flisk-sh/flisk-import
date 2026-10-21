@@ -50,5 +50,5 @@ If `<root>/.tdk/project.json` is absent, the writer includes one with the proxy 
 
 - Dropping the walk makes monorepos with per-service Compose files unsupported. The error names the missing file so this is not silent.
 - Keeping the Compose port can collide with a host port TDK assigns elsewhere. Verification against two public repos is still pending and gates leaving draft.
-- The `.tdk/project.json` template is a copy of the minimum TDK accepts today and can drift from tdk-cli-core.
+- The `.tdk/project.json` template is a copy of the minimum TDK accepts today and can drift from flisk.
 - `tdk up` on the sample import (`transmute-app/transmute`) did not reach service startup because the core bootstrap produced no Tiltfile. No health URL has been verified end to end.

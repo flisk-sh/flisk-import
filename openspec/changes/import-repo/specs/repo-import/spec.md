@@ -2,11 +2,11 @@
 
 ### Requirement: Import scans a tree and only runs registered detectors
 
-`tdk-import [dir]` SHALL walk the given directory (default `.`), skip `.git`, dependency and build directories, and paths ignored by `.gitignore`, and SHALL NOT follow symlinks. It SHALL run only detectors in the registry. `--only` SHALL select a subset by id and SHALL fail before walking when an id is unknown. The command MUST NOT shell out to Helm, kustomize, or Docker Compose.
+`flisk-import [dir]` SHALL walk the given directory (default `.`), skip `.git`, dependency and build directories, and paths ignored by `.gitignore`, and SHALL NOT follow symlinks. It SHALL run only detectors in the registry. `--only` SHALL select a subset by id and SHALL fail before walking when an id is unknown. The command MUST NOT shell out to Helm, kustomize, or Docker Compose.
 
 #### Scenario: Unknown detector id fails closed
 
-- **WHEN** a user runs `tdk-import . --only procfile,helm`
+- **WHEN** a user runs `flisk-import . --only procfile,helm`
 - **THEN** the command exits non-zero
 - **AND** the error lists the registered ids
 - **AND** no file is written
@@ -64,13 +64,13 @@ The default SHALL print the plan and ask before writing. `--dry-run` SHALL print
 
 #### Scenario: Dry run writes nothing
 
-- **WHEN** a user runs `tdk-import . --dry-run` in a tree with a Procfile
+- **WHEN** a user runs `flisk-import . --dry-run` in a tree with a Procfile
 - **THEN** the plan lists the Procfile services
 - **AND** no `service.json` is created or modified
 
 #### Scenario: Existing manifest is kept
 
-- **WHEN** `services/<stack>/api/service.json` already exists and the user runs `tdk-import . --yes` without `--force`
+- **WHEN** `services/<stack>/api/service.json` already exists and the user runs `flisk-import . --yes` without `--force`
 - **THEN** that file is unchanged
 - **AND** the report says it was skipped because it exists
 

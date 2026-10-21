@@ -1,6 +1,6 @@
 # tdk import
 
-Import the services in a repo's root `docker-compose.yml` into [TDK](https://github.com/tdk-landscape/tdk-cli-core) as `service.json` files. This is the Compose first tier of tdk-landscape/tdk-cli-core#511.
+Import the services in a repo's root `docker-compose.yml` into [TDK](https://github.com/flisk-sh/flisk) as `service.json` files. This is the Compose first tier of flisk-sh/flisk#511.
 
 ```bash
 tdk import . --dry-run     # plan only
