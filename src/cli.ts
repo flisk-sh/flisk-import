@@ -25,7 +25,7 @@ async function confirm(message: string): Promise<boolean> {
 
 const program = new Command("flisk-import")
   .version(JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")).version)
-  .description("Import services from the root docker-compose.yml into TDK")
+  .description("Import services from the root docker-compose.yml into Flisk")
   .argument("[dir]", "Directory containing docker-compose.yml", ".")
   .option("--dry-run", "Print the plan and write nothing", false)
   .option("--yes", "Write without prompting", false)
@@ -70,7 +70,7 @@ const program = new Command("flisk-import")
         `  - Put the environment values these services need in ${envFile}; values in docker-compose.yml were not copied.`,
       );
     console.log(
-      `  - Run \`tdk up\` with TDK core ${MIN_CORE_VERSION} or later. The import did not start anything.`,
+      `  - Run \`flisk up\` with Flisk core ${MIN_CORE_VERSION} or later. The import did not start anything.`,
     );
   });
 

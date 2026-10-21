@@ -24,7 +24,7 @@ const NON_HTTP_PORTS = new Set([
 ]);
 
 /**
- * Service keys this detector translates. Every other key is named in the report: TDK runs a
+ * Service keys this detector translates. Every other key is named in the report: Flisk runs a
  * bring-your-own container without volumes, command overrides, env files and the rest.
  * `healthcheck` only contributes an HTTP path; `environment` only contributes names.
  */
@@ -122,7 +122,7 @@ registerDetector({
       if (raw.profiles !== undefined) {
         skips.push({
           ...base,
-          reason: `service "${name}" has profiles ${JSON.stringify(raw.profiles)}; profiles are not enforced by TDK`,
+          reason: `service "${name}" has profiles ${JSON.stringify(raw.profiles)}; profiles are not enforced by Flisk`,
         });
         continue;
       }
@@ -181,7 +181,7 @@ registerDetector({
       } else if (ports.length > 1) {
         skips.push({
           ...base,
-          reason: `service "${name}" publishes extra container ports (${ports.filter((port) => port !== selectedPort).join(", ")}); TDK routes only ${selectedPort}`,
+          reason: `service "${name}" publishes extra container ports (${ports.filter((port) => port !== selectedPort).join(", ")}); Flisk routes only ${selectedPort}`,
         });
       }
       const dependsOn = Array.isArray(raw.depends_on)
@@ -199,7 +199,7 @@ registerDetector({
       if (foundHealthPath && !healthCheckPath) {
         skips.push({
           ...base,
-          reason: `service "${name}" health path "${foundHealthPath}" has characters TDK does not accept (only a-z, 0-9, / and -); not used`,
+          reason: `service "${name}" health path "${foundHealthPath}" has characters Flisk does not accept (only a-z, 0-9, / and -); not used`,
         });
       }
       const untranslated = Object.keys(raw).filter((key) => !TRANSLATED_KEYS.has(key));

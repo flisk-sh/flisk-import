@@ -68,7 +68,7 @@ describe("root Compose import", () => {
     const plan = buildPlan(root);
     const writes = planWrites(plan, false);
     expect(formatPlan(plan, writes)).toContain("depends:   db");
-    expect(formatPlan(plan, writes)).toContain(".tdk/project.json  [create TDK project]");
+    expect(formatPlan(plan, writes)).toContain(".tdk/project.json  [create Flisk project]");
     expect(existsSync(join(root, "services"))).toBe(false);
     expect(existsSync(join(root, ".tdk"))).toBe(false);
 
@@ -147,7 +147,7 @@ describe("root Compose import", () => {
   });
 });
 
-describe("Compose values TDK cannot take as they are", () => {
+describe("Compose values Flisk cannot take as they are", () => {
   const plan = (yaml: string) => {
     tree({ "docker-compose.yml": yaml });
     const p = buildPlan(root);
@@ -195,7 +195,7 @@ describe("Compose values TDK cannot take as they are", () => {
     });
     expect(manifest("api")).not.toHaveProperty("image");
     expect(text).toContain(
-      'note:      image "example/api:dev" is not written: with build and image, TDK builds from Dockerfile and does not pull the tag',
+      'note:      image "example/api:dev" is not written: with build and image, Flisk builds from Dockerfile and does not pull the tag',
     );
   });
 
@@ -221,7 +221,7 @@ describe("Compose values TDK cannot take as they are", () => {
     expect(text).toContain("dependsOn not written, not in this import: db");
   });
 
-  it("does not use a health path TDK rejects", () => {
+  it("does not use a health path Flisk rejects", () => {
     const { manifest, text } = plan(
       [
         "services:",
@@ -233,7 +233,7 @@ describe("Compose values TDK cannot take as they are", () => {
       ].join("\n"),
     );
     expect(manifest("api").healthCheckPath).toBe("/");
-    expect(text).toContain('health path "/health_check" has characters TDK does not accept');
+    expect(text).toContain('health path "/health_check" has characters Flisk does not accept');
   });
 
   it("reads scheme-less host:port/path and localhost/path healthchecks and notes when no path can be read", () => {

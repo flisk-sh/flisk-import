@@ -9,7 +9,7 @@ export interface Source {
 
 /**
  * What a detector learned about one process. Only fields the source file states are set;
- * nothing is defaulted. The writer is the only stage that knows the TDK manifest layout.
+ * nothing is defaulted. The writer is the only stage that knows the Flisk manifest layout.
  */
 export interface Candidate {
   kind: CandidateKind;
@@ -27,7 +27,7 @@ export interface Candidate {
   port?: number;
   /** HTTP path found in a Compose healthcheck, when it uses an explicit URL. */
   healthCheckPath?: string;
-  /** Whether TDK should expose this service through its Traefik router. */
+  /** Whether Flisk should expose this service through its Traefik router. */
   exposeViaProxy?: boolean;
   /** Set only when the source plainly names the runtime. */
   language?: "bun" | "node";
