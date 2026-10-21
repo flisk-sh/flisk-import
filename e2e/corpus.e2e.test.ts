@@ -15,7 +15,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { EXPECTATIONS } from "./corpus/expectations.js";
 
 // Runs the built binary over every Compose file in e2e/corpus and checks what it wrote against what
-// TDK accepts (flisk cli/src/utils/service-manifest.ts) and against that fixture's expectations.
+// Flisk accepts (flisk cli/src/utils/service-manifest.ts) and against that fixture's expectations.
 const CLI = join(import.meta.dirname, "..", "dist", "cli.js");
 const CORPUS = join(import.meta.dirname, "corpus");
 const HEALTH_PATH = /^\/[a-z0-9/-]*$/;
@@ -69,7 +69,7 @@ describe.each(names)("corpus: %s", (name) => {
     for (const text of want().plan ?? []) expect(r.out).toContain(text);
   });
 
-  it("--yes writes manifests TDK accepts, matching this fixture's expectations", () => {
+  it("--yes writes manifests Flisk accepts, matching this fixture's expectations", () => {
     const repo = setup();
     const compose = sha(join(repo, "docker-compose.yml"));
     const r = run([name, "--yes"]);
@@ -106,7 +106,7 @@ describe.each(names)("corpus: %s", (name) => {
         expect(Object.keys(written), `${svc} depends on a service that was not written`).toContain(
           dep,
         );
-      // An unresolved Compose variable must never reach a value TDK copies into generated config.
+      // An unresolved Compose variable must never reach a value Flisk copies into generated config.
       const { $schema: _schema, ...fields } = m;
       expect(JSON.stringify(fields), svc).not.toContain("$");
     }

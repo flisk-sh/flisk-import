@@ -159,7 +159,7 @@ export const EXPECTATIONS: Record<string, Expectation> = {
   },
   "bad-health-path": {
     services: { api: { match: { healthCheckPath: "/" } } },
-    plan: ['health path "/health_check" has characters TDK does not accept'],
+    plan: ['health path "/health_check" has characters Flisk does not accept'],
   },
   "worker-no-ports": {
     services: { jobs: svc({ match: { buildContext: "../../.." } }, privateSvc) },

@@ -1,20 +1,20 @@
 import { existsSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 
-/** Manifest constants of the TDK service.json this tool writes. */
+/** Manifest constants of the Flisk service.json this tool writes. */
 export const SERVICE_MANIFEST_SCHEMA_VERSION = 1;
 export const SERVICE_MANIFEST_SCHEMA_URL = "https://flisk.sh/schema.service.json";
 /**
- * Oldest TDK core that starts an imported project: 1.3.104 added `buildContext`, and 1.3.145
+ * Oldest Flisk core that starts an imported project: 1.3.104 added `buildContext`, and 1.3.145
  * (flisk#1018) bootstraps a project that has `.tdk/project.json` but no Tiltfile yet.
  * Stated, not checked: the importer does not read the installed core version.
  */
 export const MIN_CORE_VERSION = "1.3.145";
-/** TDK's bring-your-own port range. */
+/** Flisk's bring-your-own port range. */
 export const BYO_PORT_RANGE = { min: 4000, max: 5999, label: "4000-5999" } as const;
 
 /**
- * Values TDK copies into generated Compose and Traefik config must match these, or `tdk up` refuses
+ * Values Flisk copies into generated Compose and Traefik config must match these, or `flisk up` refuses
  * the manifest (flisk `cli/src/utils/service-manifest.ts`, engine `manifest/parser.star`).
  */
 export const HEALTH_CHECK_PATH_PATTERN = /^\/[a-z0-9/-]*$/;

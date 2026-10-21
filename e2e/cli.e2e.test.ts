@@ -64,7 +64,7 @@ describe("flisk-import (built CLI)", () => {
     expect(manifest("db-svc")).not.toHaveProperty("healthCheckPath");
     expect(r.out).toContain("Next:");
     expect(r.out).toContain("shop/.env; values in docker-compose.yml were not copied");
-    expect(r.out).toContain("Run `tdk up` with TDK core 1.3.145 or later");
+    expect(r.out).toContain("Run `flisk up` with Flisk core 1.3.145 or later");
     expect(JSON.stringify(manifest("api"))).not.toContain("postgres://");
     expect(existsSync(join(repo, ".tdk", "project.json"))).toBe(true);
   });
@@ -106,7 +106,7 @@ describe("flisk-import (built CLI)", () => {
     writeFileSync(join(repo, "compose.yaml"), "services:\n  web:\n    image: nginx\n");
     const r = run(["shop", "--yes"]);
     expect(r.code).toBe(1);
-    expect(r.err).toContain("(found compose.yaml); tdk import reads only that file");
+    expect(r.err).toContain("(found compose.yaml); flisk import reads only that file");
     expect(r.err).toContain("ln -s compose.yaml docker-compose.yml");
     expect(existsSync(join(repo, "services"))).toBe(false);
   });

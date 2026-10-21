@@ -47,12 +47,12 @@ export function buildPlan(dir: string): ImportPlan {
   if (!isFile(composePath)) {
     const others = OTHER_COMPOSE_FILES.filter(isFile);
     throw new ImportError(
-      `No root docker-compose.yml found in ${root}${others.length ? ` (found ${others.join(", ")})` : ""}; tdk import reads only that file`,
+      `No root docker-compose.yml found in ${root}${others.length ? ` (found ${others.join(", ")})` : ""}; flisk import reads only that file`,
       others.length
         ? [
             `Other Compose file names are not read yet. To import ${others[0]}, link it: ln -s ${others[0]} docker-compose.yml`,
           ]
-        : ["Run tdk import in the directory that holds docker-compose.yml"],
+        : ["Run flisk import in the directory that holds docker-compose.yml"],
     );
   }
   for (const name of OTHER_COMPOSE_FILES.filter(isFile)) {
@@ -66,7 +66,7 @@ export function buildPlan(dir: string): ImportPlan {
     skips.push({
       file: name,
       detector: "compose",
-      reason: `not applied; \`docker compose up\` merges it over ${COMPOSE_FILE}, tdk import does not`,
+      reason: `not applied; \`docker compose up\` merges it over ${COMPOSE_FILE}, flisk import does not`,
     });
   }
   for (const detector of detectors) {

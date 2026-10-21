@@ -42,7 +42,7 @@ function existingPort(path: string): number | undefined {
 }
 
 /**
- * Maps merged services onto TDK bring-your-own manifests. This is the only stage that knows the
+ * Maps merged services onto Flisk bring-your-own manifests. This is the only stage that knows the
  * layout `<project>/services/<stack>/<name>/service.json`. Nothing is written here.
  */
 /** Images that serve a protocol other than HTTP. Matched against the image name, not its tag. */
@@ -71,7 +71,7 @@ export function planWrites(plan: ImportPlan, force: boolean): WritePlan {
             phases: {
               pre_alpha: {
                 name: "Pre-Alpha",
-                description: "TDK proxy and imported Compose services",
+                description: "Flisk proxy and imported Compose services",
                 enabledStacks: ["proxy", stack],
               },
               alpha: { name: "Alpha", description: "", enabledStacks: [] },
@@ -106,7 +106,7 @@ export function planWrites(plan: ImportPlan, force: boolean): WritePlan {
         : !service.image
           ? "Compose gives it neither `image` nor a usable `build`"
           : !IMAGE_PATTERN.test(service.image)
-            ? `image "${service.image}" uses Compose variables or characters TDK does not accept; set a literal image in docker-compose.yml, or write this service.json by hand`
+            ? `image "${service.image}" uses Compose variables or characters Flisk does not accept; set a literal image in docker-compose.yml, or write this service.json by hand`
             : undefined;
     if (reason) rejected.push({ name: service.name, reason });
     return !reason;
@@ -180,11 +180,11 @@ export function planWrites(plan: ImportPlan, force: boolean): WritePlan {
       notes.push("environment values are not written; put them in the project .env");
     if (service.dockerfile && service.image)
       notes.push(
-        `image "${service.image}" is not written: with build and image, TDK builds from ${service.dockerfile} and does not pull the tag`,
+        `image "${service.image}" is not written: with build and image, Flisk builds from ${service.dockerfile} and does not pull the tag`,
       );
 
     // With both build and image, Compose builds the Dockerfile and tags the result as `image`.
-    // Omit `image` from service.json so TDK builds from the Dockerfile instead of pulling the tag.
+    // Omit `image` from service.json so Flisk builds from the Dockerfile instead of pulling the tag.
     const source: Record<string, string> = service.dockerfile
       ? {
           buildContext:
