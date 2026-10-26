@@ -6,8 +6,8 @@
 
 **Goals**
 
-- One root Compose file in, a plan out, then an idempotent write that yields a project `tdk up` can load.
-- Keep what Compose states (build context, image, port, `depends_on`, health path) instead of replacing it with TDK defaults.
+- One root Compose file in, a plan out, then an idempotent write that yields a project `flisk up` can load.
+- Keep what Compose states (build context, image, port, `depends_on`, health path) instead of replacing it with Flisk defaults.
 - Never write environment values.
 
 **Non-Goals**
@@ -28,7 +28,7 @@
 
 ### Keep the Compose port
 
-The writer keeps a Compose container port from 1024 to 65535 and notes when it is outside TDK's usual 4000-5999, because the image already listens there. Below 1024 TDK rejects the port, so the writer assigns a free one from 4000-5999 and the note says the container must read `PORT`. Different containers can share a port (core only warns in `tdk doctor`), so ports are not checked against other services.
+The writer keeps a Compose container port from 1024 to 65535 and notes when it is outside Flisk's usual 4000-5999, because the image already listens there. Below 1024 Flisk rejects the port, so the writer assigns a free one from 4000-5999 and the note says the container must read `PORT`. Different containers can share a port (core only warns in `flisk doctor`), so ports are not checked against other services.
 
 ### Private services
 
@@ -36,19 +36,19 @@ A service whose only port is a known non-HTTP port, or that publishes no single 
 
 ### Build and image
 
-With `build`, the manifest carries `buildContext` and `dockerfile`; `image` is ignored, because Compose builds and tags it while TDK would pull it. Without `build`, `image` must match TDK's accepted characters (`[A-Za-z0-9._/:@-]`); an interpolated image is reported and not written, and dependencies on it are dropped.
+With `build`, the manifest carries `buildContext` and `dockerfile`; `image` is ignored, because Compose builds and tags it while Flisk would pull it. Without `build`, `image` must match Flisk's accepted characters (`[A-Za-z0-9._/:@-]`); an interpolated image is reported and not written, and dependencies on it are dropped.
 
 ### Report
 
-Every service key the detector does not translate is named, as are `compose.yaml`-style alternates and override files that `docker compose` would use. A health path TDK rejects is reported and not used. A build context outside the directory skips the service.
+Every service key the detector does not translate is named, as are `compose.yaml`-style alternates and override files that `docker compose` would use. A health path Flisk rejects is reported and not used. A build context outside the directory skips the service.
 
 ### Project config
 
-If `<root>/.tdk/project.json` is absent, the writer includes one with the proxy and the imported stack enabled and `discovery.paths: ["services/*/*"]`. It is created with `flag: "wx"`, so an existing file is never overwritten, including by `--force`.
+If `<root>/.flisk/project.json` is absent, the writer includes one with the proxy and the imported stack enabled and `discovery.paths: ["services/*/*"]`. It is created with `flag: "wx"`, so an existing file is never overwritten, including by `--force`.
 
 ## Risks / Trade-offs
 
 - Dropping the walk makes monorepos with per-service Compose files unsupported. The error names the missing file so this is not silent.
-- Keeping the Compose port can collide with a host port TDK assigns elsewhere. Verification against two public repos is still pending and gates leaving draft.
-- The `.tdk/project.json` template is a copy of the minimum TDK accepts today and can drift from flisk.
-- `tdk up` on the sample import (`transmute-app/transmute`) did not reach service startup because the core bootstrap produced no Tiltfile. No health URL has been verified end to end.
+- Keeping the Compose port can collide with a host port Flisk assigns elsewhere. Verification against two public repos is still pending and gates leaving draft.
+- The `.flisk/project.json` template is a copy of the minimum Flisk accepts today and can drift from flisk.
+- `flisk up` on the sample import (`transmute-app/transmute`) did not reach service startup because the core bootstrap produced no Tiltfile. No health URL has been verified end to end.

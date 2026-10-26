@@ -10,7 +10,7 @@ import {
   SERVICE_MANIFEST_SCHEMA_URL,
   SERVICE_MANIFEST_SCHEMA_VERSION,
   validateName,
-} from "./tdk.js";
+} from "./flisk.js";
 
 export type WriteStatus = "create" | "overwrite" | "exists";
 
@@ -23,7 +23,7 @@ export interface WriteItem {
 }
 
 export interface WritePlan {
-  /** Directory holding `.tdk/project.json`, existing or about to be created. */
+  /** Directory holding `.flisk/project.json`, existing or about to be created. */
   projectRoot: string;
   stack: string;
   items: WriteItem[];
@@ -59,7 +59,7 @@ export function planWrites(plan: ImportPlan, force: boolean): WritePlan {
     ]);
   }
   const servicesDir = join(projectRoot, "services");
-  const projectConfigPath = join(projectRoot, ".tdk", "project.json");
+  const projectConfigPath = join(projectRoot, ".flisk", "project.json");
   const projectConfig = existsSync(projectConfigPath)
     ? undefined
     : {

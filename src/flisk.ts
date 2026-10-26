@@ -6,7 +6,7 @@ export const SERVICE_MANIFEST_SCHEMA_VERSION = 1;
 export const SERVICE_MANIFEST_SCHEMA_URL = "https://flisk.sh/schema.service.json";
 /**
  * Oldest Flisk core that starts an imported project: 1.3.104 added `buildContext`, and 1.3.145
- * (flisk#1018) bootstraps a project that has `.tdk/project.json` but no Tiltfile yet.
+ * (flisk#1018) bootstraps a project that has `.flisk/project.json` but no Tiltfile yet.
  * Stated, not checked: the importer does not read the installed core version.
  */
 export const MIN_CORE_VERSION = "1.3.145";
@@ -34,11 +34,11 @@ export function validateName(
       };
 }
 
-/** Nearest directory at or above `start` holding `.tdk/project.json`. */
+/** Nearest directory at or above `start` holding `.flisk/project.json`. */
 export function findProjectRoot(start: string): string | null {
   let dir = resolve(start);
   while (true) {
-    if (existsSync(join(dir, ".tdk", "project.json"))) return dir;
+    if (existsSync(join(dir, ".flisk", "project.json"))) return dir;
     const parent = dirname(dir);
     if (parent === dir) return null;
     dir = parent;

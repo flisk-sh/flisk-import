@@ -7,7 +7,7 @@ import "./detectors/index.js";
 import { ImportError } from "./errors.js";
 import { formatPlan } from "./format.js";
 import { buildPlan } from "./plan.js";
-import { MIN_CORE_VERSION } from "./tdk.js";
+import { MIN_CORE_VERSION } from "./flisk.js";
 import { applyWrites, manifestRelPath, planWrites } from "./write.js";
 
 async function confirm(message: string): Promise<boolean> {
@@ -49,7 +49,7 @@ const program = new Command("flisk-import")
     if (
       !options.yes &&
       !(await confirm(
-        `Write ${pending.length} service.json file(s)${writes.projectConfig ? " and create .tdk/project.json" : ""}?`,
+        `Write ${pending.length} service.json file(s)${writes.projectConfig ? " and create .flisk/project.json" : ""}?`,
       ))
     ) {
       console.log("Nothing written.");
@@ -61,7 +61,7 @@ const program = new Command("flisk-import")
       console.log(`  wrote ${relative(process.cwd(), item.path) || manifestRelPath(plan, item)}`);
     }
     console.log(
-      `\nWrote ${written.length} service.json file(s)${writes.projectConfig ? " and created .tdk/project.json" : ""}.`,
+      `\nWrote ${written.length} service.json file(s)${writes.projectConfig ? " and created .flisk/project.json" : ""}.`,
     );
     const envFile = relative(process.cwd(), join(writes.projectRoot, ".env")) || ".env";
     console.log("\nNext:");

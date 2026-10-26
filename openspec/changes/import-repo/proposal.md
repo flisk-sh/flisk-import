@@ -17,11 +17,11 @@ The unit is a directory. Detectors only claim files and emit candidates. Merge a
 
 ### New Capabilities
 
-- `repo-import`: scan a tree, run registered detectors, merge candidates, report skips and conflicts, and write a TDK landscape without overwriting existing manifests.
+- `repo-import`: scan a tree, run registered detectors, merge candidates, report skips and conflicts, and write a Flisk landscape without overwriting existing manifests.
 
 ### Modified Capabilities
 
-None. `tdk resource` and bring-your-own stay the path for a hand-written service. Import writes the same `service.json` they already accept.
+None. `flisk resource` and bring-your-own stay the path for a hand-written service. Import writes the same `service.json` they already accept.
 
 ## Impact
 

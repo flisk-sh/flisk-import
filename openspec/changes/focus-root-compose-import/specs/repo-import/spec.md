@@ -28,19 +28,19 @@ Candidates for the same directory and name SHALL merge. Two different values for
 
 ### Requirement: Write is explicit and does not overwrite
 
-The default SHALL print the plan and ask before writing. `--dry-run` SHALL write nothing. `--yes` SHALL write without prompting. An existing `service.json` MUST be left unchanged unless `--force`. When `<root>/.tdk/project.json` does not exist, the write SHALL also create a minimal one enabling the proxy and the imported stack, and MUST NOT overwrite an existing one, with or without `--force`. A Compose container port from 1024 to 65535 SHALL be kept; a port outside TDK's usual range SHALL be noted in the plan. A Compose port below 1024 SHALL be replaced by a free port and the plan SHALL say the container must read `PORT`. A service with no Compose port SHALL be assigned a free port by TDK.
+The default SHALL print the plan and ask before writing. `--dry-run` SHALL write nothing. `--yes` SHALL write without prompting. An existing `service.json` MUST be left unchanged unless `--force`. When `<root>/.flisk/project.json` does not exist, the write SHALL also create a minimal one enabling the proxy and the imported stack, and MUST NOT overwrite an existing one, with or without `--force`. A Compose container port from 1024 to 65535 SHALL be kept; a port outside Flisk's usual range SHALL be noted in the plan. A Compose port below 1024 SHALL be replaced by a free port and the plan SHALL say the container must read `PORT`. A service with no Compose port SHALL be assigned a free port by Flisk.
 
 #### Scenario: Project config is created once
 
-- **WHEN** a user runs `flisk-import . --yes` in a repo with no `.tdk/project.json`
-- **THEN** `.tdk/project.json` is created with the imported stack enabled
+- **WHEN** a user runs `flisk-import . --yes` in a repo with no `.flisk/project.json`
+- **THEN** `.flisk/project.json` is created with the imported stack enabled
 - **AND** a second run with `--force` leaves it unchanged
 
-#### Scenario: Compose port outside TDK's range is kept
+#### Scenario: Compose port outside Flisk's range is kept
 
 - **WHEN** a Compose service listens on container port 8080
 - **THEN** the written `service.json` has port 8080
-- **AND** the plan notes the port is outside TDK's usual range
+- **AND** the plan notes the port is outside Flisk's usual range
 
 #### Scenario: Database service is a private bring-your-own service
 
@@ -59,7 +59,7 @@ The default SHALL print the plan and ask before writing. `--dry-run` SHALL write
 - **WHEN** a Compose service has both `build` and `image`
 - **THEN** the manifest sets `buildContext` and `dockerfile` and omits `image`
 
-#### Scenario: Values TDK would refuse are not written
+#### Scenario: Values Flisk would refuse are not written
 
 - **WHEN** a Compose image contains `${VAR}`, or a health path has characters outside `a-z0-9/-`
 - **THEN** the image service is reported and not written, or the health path is not used

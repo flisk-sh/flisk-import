@@ -68,9 +68,9 @@ describe("root Compose import", () => {
     const plan = buildPlan(root);
     const writes = planWrites(plan, false);
     expect(formatPlan(plan, writes)).toContain("depends:   db");
-    expect(formatPlan(plan, writes)).toContain(".tdk/project.json  [create Flisk project]");
+    expect(formatPlan(plan, writes)).toContain(".flisk/project.json  [create Flisk project]");
     expect(existsSync(join(root, "services"))).toBe(false);
-    expect(existsSync(join(root, ".tdk"))).toBe(false);
+    expect(existsSync(join(root, ".flisk"))).toBe(false);
 
     applyWrites(writes);
     const api = JSON.parse(readFileSync(serviceJson("api"), "utf8"));
@@ -92,7 +92,7 @@ describe("root Compose import", () => {
     });
     expect(readFileSync(serviceJson("api"), "utf8")).not.toContain("postgres://");
     expect(
-      JSON.parse(readFileSync(join(root, ".tdk", "project.json"), "utf8")).phases.pre_alpha
+      JSON.parse(readFileSync(join(root, ".flisk", "project.json"), "utf8")).phases.pre_alpha
         .enabledStacks,
     ).toContain("shop");
   });

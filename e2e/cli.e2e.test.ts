@@ -40,7 +40,7 @@ describe("flisk-import (built CLI)", () => {
     expect(r.out).toContain("health:    /health");
     expect(r.out).toContain("Dry run: nothing written.");
     expect(existsSync(join(repo, "services"))).toBe(false);
-    expect(existsSync(join(repo, ".tdk"))).toBe(false);
+    expect(existsSync(join(repo, ".flisk"))).toBe(false);
   });
 
   it("--yes writes one manifest per service, dependency wiring, and project setup without env values", () => {
@@ -66,7 +66,7 @@ describe("flisk-import (built CLI)", () => {
     expect(r.out).toContain("shop/.env; values in docker-compose.yml were not copied");
     expect(r.out).toContain("Run `flisk up` with Flisk core 1.3.145 or later");
     expect(JSON.stringify(manifest("api"))).not.toContain("postgres://");
-    expect(existsSync(join(repo, ".tdk", "project.json"))).toBe(true);
+    expect(existsSync(join(repo, ".flisk", "project.json"))).toBe(true);
   });
 
   it("asks before writing and does not overwrite existing service.json without --force", () => {

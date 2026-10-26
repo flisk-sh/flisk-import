@@ -8,7 +8,7 @@ flisk import .
 flisk import . --yes
 ```
 
-Each Compose service becomes `services/<stack>/<service>/service.json`, where the stack is the directory name. When the repo is not already a Flisk project, the write also creates `.tdk/project.json` with the imported stack and the Traefik proxy enabled. Existing `service.json` and `.tdk/project.json` files are kept; `--force` overwrites `service.json` files only. The Compose file and the source tree are never changed.
+Each Compose service becomes `services/<stack>/<service>/service.json`, where the stack is the directory name. When the repo is not already a Flisk project, the write also creates `.flisk/project.json` with the imported stack and the Traefik proxy enabled. Existing `service.json` and `.flisk/project.json` files are kept; `--force` overwrites `service.json` files only. The Compose file and the source tree are never changed.
 
 ## What maps
 
@@ -39,7 +39,7 @@ The plan names each of these. Nothing below is guessed.
 ## Before `flisk up`
 
 1. Put the environment values the services need in the project `.env`. Values in `docker-compose.yml` were not copied.
-2. Use Flisk core **1.3.145 or later**. 1.3.104 added `buildContext` ([flisk#525](https://github.com/flisk-sh/flisk/pull/525)); 1.3.145 starts a project that has `.tdk/project.json` but no Tiltfile yet ([flisk#1018](https://github.com/flisk-sh/flisk/pull/1018)). The importer does not check the installed version.
+2. Use Flisk core **1.3.145 or later**. 1.3.104 added `buildContext` ([flisk#525](https://github.com/flisk-sh/flisk/pull/525)); 1.3.145 starts a project that has `.flisk/project.json` but no Tiltfile yet ([flisk#1018](https://github.com/flisk-sh/flisk/pull/1018)). The importer does not check the installed version.
 3. Flisk injects its own `PORT`, `DATABASE_URL` and a `Host: <service>.<project>.localhost` header. An app that validates its host or reads `DATABASE_URL` may need configuration that Compose did not.
 
 The command exits 1 when nothing could be imported (an unreadable file, or every service skipped).

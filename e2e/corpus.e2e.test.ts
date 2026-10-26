@@ -65,7 +65,7 @@ describe.each(names)("corpus: %s", (name) => {
     const r = run([name, "--dry-run"]);
     expect(r.code).toBe(want().exit ?? 0);
     expect(existsSync(join(repo, "services"))).toBe(false);
-    expect(existsSync(join(repo, ".tdk"))).toBe(false);
+    expect(existsSync(join(repo, ".flisk"))).toBe(false);
     for (const text of want().plan ?? []) expect(r.out).toContain(text);
   });
 
@@ -112,11 +112,11 @@ describe.each(names)("corpus: %s", (name) => {
     }
 
     // No environment value reaches disk, and the source Compose file is untouched.
-    for (const file of [...walk(join(repo, "services")), ...walk(join(repo, ".tdk"))])
+    for (const file of [...walk(join(repo, "services")), ...walk(join(repo, ".flisk"))])
       expect(readFileSync(file, "utf8"), file).not.toContain("SECRET_TOKEN");
     expect(sha(join(repo, "docker-compose.yml"))).toBe(compose);
     if (Object.keys(expected).length > 0)
-      expect(existsSync(join(repo, ".tdk", "project.json"))).toBe(true);
+      expect(existsSync(join(repo, ".flisk", "project.json"))).toBe(true);
   });
 
   it("running --yes again keeps every file", () => {

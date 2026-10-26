@@ -49,7 +49,7 @@ Candidates for the same directory and name SHALL merge. A missing field SHALL be
 - **WHEN** Compose maps service `api` to port 8080 and `api/Dockerfile` exposes 3000
 - **THEN** the plan reports a port conflict with both files
 - **AND** the written `service.json` takes its port from neither source
-- **AND** TDK assigns a free port from its bring-your-own range
+- **AND** Flisk assigns a free port from its bring-your-own range
 - **AND** the service is still created from the fields that agree
 
 #### Scenario: Dockerfile fills a command Compose did not set

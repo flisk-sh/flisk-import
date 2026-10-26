@@ -2,7 +2,7 @@
 
 #511 lists 30 detectors. If `import.ts` switches on file name, each new format edits the command, the merge, and the writer. The first three formats also describe the same service (Compose `build: ./api`, `api/Dockerfile`, `api/package.json`). That merge is the hard part, so it is built now, with Procfile as the control that needs no merge.
 
-TDK already has a service manifest and a bring-your-own container path. Import must produce those, not a second project layout.
+Flisk already has a service manifest and a bring-your-own container path. Import must produce those, not a second project layout.
 
 ## Goals / Non-Goals
 
@@ -32,7 +32,7 @@ A detector that needs a sibling file (Compose `build: ./api`) records a hint on 
 
 Detectors emit candidates, never `service.json`. A candidate is `kind: service | job`, a suggested name, a directory key, only the fields it actually knows (image, command, port, env, dependsOn, language), `confidence: high | low`, and `sources: [{ file, detector }]`. Unknown fields are omitted, not filled with defaults.
 
-The writer is the only stage that knows the TDK layout. That keeps a bad detector from inventing schema. A bring-your-own manifest requires a port in 4000-5999 and a health path, so the writer assigns the next free TDK port exactly as `tdk resource` does. That is TDK's port, not an imported claim: a candidate port that is missing or in conflict is never guessed from the sources.
+The writer is the only stage that knows the Flisk layout. That keeps a bad detector from inventing schema. A bring-your-own manifest requires a port in 4000-5999 and a health path, so the writer assigns the next free Flisk port exactly as `flisk resource` does. That is Flisk's port, not an imported claim: a candidate port that is missing or in conflict is never guessed from the sources.
 
 ### Merge is precedence plus conflict
 
@@ -50,11 +50,11 @@ Walk from the given directory. Honor `.gitignore` (simple patterns: names, globs
 
 Default is plan, then prompt. `--dry-run` never writes. `--yes` writes. An existing `service.json` is left alone unless `--force`. Re-running with the same inputs and `--force` produces the same files. The report is printed, not written into the manifest.
 
-Layout is `<project>/services/<stack>/<name>/service.json`, where the project is the nearest TDK project root at or above the target directory, else the target directory itself, and the stack is the kebab-cased name of the target directory.
+Layout is `<project>/services/<stack>/<name>/service.json`, where the project is the nearest Flisk project root at or above the target directory, else the target directory itself, and the stack is the kebab-cased name of the target directory.
 
 ### Native provider versus bring-your-own
 
-Only a high-confidence mapping sets `language` on the candidate: a package.json `start`/`dev` script that is `bun` or `node`. The plan shows it, but the writer still emits bring-your-own: a native backend makes TDK generate its own app image, and that was not verified against an imported repo's code. Mapping to a native provider is a later change, with a `tdk up` check. Everything is bring-your-own with the image or command the detector found. The manifest has no field for a bring-your-own start command, so a command is recorded as `dev.command` and the plan says it is not run until an image or Dockerfile exists.
+Only a high-confidence mapping sets `language` on the candidate: a package.json `start`/`dev` script that is `bun` or `node`. The plan shows it, but the writer still emits bring-your-own: a native backend makes Flisk generate its own app image, and that was not verified against an imported repo's code. Mapping to a native provider is a later change, with a `flisk up` check. Everything is bring-your-own with the image or command the detector found. The manifest has no field for a bring-your-own start command, so a command is recorded as `dev.command` and the plan says it is not run until an image or Dockerfile exists.
 
 ## Risks / Trade-offs
 
@@ -74,5 +74,5 @@ No existing command changes. Import is additive. Rollback is not running it; it 
 ## Implementation notes
 
 - Compose `ports:` gives the container-side port (`8080:3000` is 3000), the same quantity as Dockerfile `EXPOSE`. Several distinct ports means no port is imported.
-- The manifest's `dockerfile` is a path from the manifest directory to the Dockerfile in the source tree. TDK builds bring-your-own with the manifest directory as the build context, so `COPY` paths in an imported Dockerfile may need adjusting. The plan says so.
+- The manifest's `dockerfile` is a path from the manifest directory to the Dockerfile in the source tree. Flisk builds bring-your-own with the manifest directory as the build context, so `COPY` paths in an imported Dockerfile may need adjusting. The plan says so.
 - Environment variable names are listed; values are never carried, because they may be secrets.

@@ -17,7 +17,7 @@ export function formatPlan(plan: ImportPlan, writes: WritePlan): string {
     `Read only: ${plan.files.join(", ")}. Lines below name what was not translated.`,
     "",
   );
-  if (writes.projectConfig) out.push(`  .tdk/project.json  [create Flisk project]`, "");
+  if (writes.projectConfig) out.push(`  .flisk/project.json  [create Flisk project]`, "");
   for (const service of plan.services) {
     const item = writes.items.find((i) => i.service === service);
     out.push(`  ${service.name}  (${service.kind}${service.dir ? `, ${service.dir}/` : ""})`);
