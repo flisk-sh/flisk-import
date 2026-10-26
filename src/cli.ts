@@ -5,9 +5,9 @@ import { createInterface } from "node:readline/promises";
 import { Command } from "commander";
 import "./detectors/index.js";
 import { ImportError } from "./errors.js";
+import { MIN_CORE_VERSION } from "./flisk.js";
 import { formatPlan } from "./format.js";
 import { buildPlan } from "./plan.js";
-import { MIN_CORE_VERSION } from "./flisk.js";
 import { applyWrites, manifestRelPath, planWrites } from "./write.js";
 
 async function confirm(message: string): Promise<boolean> {

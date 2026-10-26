@@ -1,8 +1,8 @@
 import { readFileSync } from "node:fs";
 import { dirname, isAbsolute, join, normalize } from "node:path/posix";
 import { isAlias, isMap, type Node, parseDocument, visit } from "yaml";
-import { registerDetector } from "../registry.js";
 import { HEALTH_CHECK_PATH_PATTERN } from "../flisk.js";
+import { registerDetector } from "../registry.js";
 import type { Candidate, Skip } from "../types.js";
 
 type Obj = Record<string, unknown>;

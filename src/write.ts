@@ -1,8 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, relative, resolve } from "node:path";
 import { ImportError } from "./errors.js";
-import { type MergedService, toResourceName } from "./merge.js";
-import { type ImportPlan, usedManifestPorts } from "./plan.js";
 import {
   BYO_PORT_RANGE,
   findProjectRoot,
@@ -11,6 +9,8 @@ import {
   SERVICE_MANIFEST_SCHEMA_VERSION,
   validateName,
 } from "./flisk.js";
+import { type MergedService, toResourceName } from "./merge.js";
+import { type ImportPlan, usedManifestPorts } from "./plan.js";
 
 export type WriteStatus = "create" | "overwrite" | "exists";
 
