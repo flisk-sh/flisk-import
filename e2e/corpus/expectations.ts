@@ -29,9 +29,9 @@ const svc = (check: ServiceCheck, base: ServiceCheck): ServiceCheck => ({
 export const EXPECTATIONS: Record<string, Expectation> = {
   "nginx-static": {
     services: {
-      web: svc({ match: { image: "nginx:1.27", port: 4000, healthCheckPath: "/" } }, routed),
+      web: svc({ match: { image: "nginx:1.27", port: 80, healthCheckPath: "/" } }, routed),
     },
-    plan: ["Compose port 80 is outside 4000-5999 or already used", "health:    / (assumed)"],
+    plan: ["port:      80", "health:    / (assumed)"],
   },
   "node-api-build": {
     services: {
@@ -51,48 +51,48 @@ export const EXPECTATIONS: Record<string, Expectation> = {
   },
   "wordpress-mysql": {
     services: {
-      wordpress: svc({ match: { port: 4001, dependsOn: ["db-svc"] } }, routed),
-      "db-svc": svc({ match: { image: "mysql:8", port: 4000 } }, privateSvc),
+      wordpress: svc({ match: { port: 80, dependsOn: ["db"] } }, routed),
+      db: svc({ match: { image: "mysql:8", port: 3306 } }, privateSvc),
     },
     plan: ["keys not translated: volumes"],
   },
   "gitea-postgres": {
     services: {
-      gitea: svc({ match: { port: 4001, dependsOn: ["db-svc"] } }, routed),
-      "db-svc": privateSvc,
+      gitea: svc({ match: { port: 3000, dependsOn: ["db"] } }, routed),
+      db: privateSvc,
     },
     plan: ["publishes extra container ports (22)"],
   },
   "redis-only": {
-    services: { cache: svc({ match: { image: "redis:7", port: 4000 } }, privateSvc) },
+    services: { cache: svc({ match: { image: "redis:7", port: 6379 } }, privateSvc) },
   },
   "rails-sidekiq": {
     services: {
       web: svc(
-        { match: { buildContext: "../../..", port: 4002, dependsOn: ["db-svc", "redis"] } },
+        { match: { buildContext: "../../..", port: 3000, dependsOn: ["db", "redis"] } },
         routed,
       ),
       sidekiq: svc({ match: { buildContext: "../../.." } }, privateSvc),
-      "db-svc": { match: { exposeViaProxy: false, port: 5432 }, without: ["healthCheckPath"] },
+      db: { match: { exposeViaProxy: false, port: 5432 }, without: ["healthCheckPath"] },
       redis: privateSvc,
     },
     plan: ["keys not translated: command"],
   },
   "django-celery": {
     services: {
-      web: svc({ match: { port: 4001, buildContext: "../../../backend" } }, routed),
-      worker: svc({ match: { dependsOn: ["db-svc"] } }, privateSvc),
-      "db-svc": privateSvc,
+      web: svc({ match: { port: 8000, buildContext: "../../../backend" } }, routed),
+      worker: svc({ match: { dependsOn: ["db"] } }, privateSvc),
+      db: privateSvc,
     },
-    plan: ["Compose port 8000 is outside 4000-5999 or already used; assigned 4001"],
+    plan: ["port:      8000"],
   },
   "spring-boot-mysql": {
     services: {
       app: svc(
-        { match: { port: 4000, healthCheckPath: "/actuator/health", dependsOn: ["db-svc"] } },
+        { match: { port: 8080, healthCheckPath: "/actuator/health", dependsOn: ["db"] } },
         routed,
       ),
-      "db-svc": privateSvc,
+      db: svc({ match: { port: 3306 } }, privateSvc),
     },
   },
   "interpolated-image": {
@@ -108,7 +108,7 @@ export const EXPECTATIONS: Record<string, Expectation> = {
     plan: ["ports not understood"],
   },
   "partly-unreadable-ports": {
-    services: { app: svc({ match: { port: 4000 } }, routed) },
+    services: { app: svc({ match: { port: 8080 } }, routed) },
     plan: ["port entries that were not understood and ignored", "only 8080 was read"],
   },
   "profiles-and-extends": {
@@ -130,19 +130,23 @@ export const EXPECTATIONS: Record<string, Expectation> = {
     plan: ["uses YAML anchors/aliases"],
   },
   "env-secrets": {
-    services: { api: { match: { port: 4000 } }, worker: privateSvc },
-    plan: ["environment values are not written"],
+    services: {
+      api: { match: { port: 4000, secrets: { required: ["API_KEY", "PLAIN"] } } },
+      worker: svc({ match: { secrets: { required: ["DB_URL"] } } }, privateSvc),
+    },
+    plan: ["env:       API_KEY, PLAIN"],
   },
   "privileged-ports": {
-    services: { one: { match: { port: 4000 } }, two: { match: { port: 4001 } } },
+    services: { one: { match: { port: 80 } }, two: { match: { port: 81 } } },
   },
   "shared-port": {
-    services: { "a-svc": { match: { port: 4000 } }, "b-svc": { match: { port: 4001 } } },
+    // Each service has its own container, so both keep the Compose port.
+    services: { "a-svc": { match: { port: 4000 } }, "b-svc": { match: { port: 4000 } } },
   },
   "long-syntax-ports": {
     // `target` is the container port (8080); `published: 80` is the host side and does not matter.
-    services: { api: { match: { port: 4000 } } },
-    plan: ["Compose port 8080 is outside 4000-5999 or already used; assigned 4000"],
+    services: { api: { match: { port: 8080 } } },
+    plan: ["port:      8080"],
   },
   "build-and-image": {
     services: {
@@ -166,15 +170,15 @@ export const EXPECTATIONS: Record<string, Expectation> = {
   },
   "kafka-zookeeper": {
     services: {
-      zookeeper: svc({ match: { port: 4002 } }, privateSvc),
-      kafka: svc({ match: { port: 4001, dependsOn: ["zookeeper"] } }, privateSvc),
-      kafdrop: svc({ match: { port: 4000, dependsOn: ["kafka"] } }, routed),
+      zookeeper: svc({ match: { port: 2181 } }, privateSvc),
+      kafka: svc({ match: { port: 9092, dependsOn: ["zookeeper"] } }, privateSvc),
+      kafdrop: svc({ match: { port: 9000, dependsOn: ["kafka"] } }, routed),
     },
   },
   "mongo-express": {
     services: {
       mongo: privateSvc,
-      express: svc({ match: { port: 4000, dependsOn: ["mongo"] } }, routed),
+      express: svc({ match: { port: 8081, dependsOn: ["mongo"] } }, routed),
     },
   },
   "missing-dependency": {

@@ -31,8 +31,13 @@ export interface Candidate {
   exposeViaProxy?: boolean;
   /** Set only when the source plainly names the runtime. */
   language?: "bun" | "node";
-  /** Environment variable names. Values are never carried: they may be secrets. */
+  /** Environment variable names. */
   envKeys?: string[];
+  /**
+   * Literal values the source states for those names. They go to the project .env (gitignored), never into
+   * service.json; a value that uses Compose interpolation (`${VAR}`) is left out.
+   */
+  env?: Record<string, string>;
   dependsOn?: string[];
   confidence: Confidence;
   sources: Source[];

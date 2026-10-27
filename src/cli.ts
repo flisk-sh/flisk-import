@@ -65,10 +65,13 @@ const program = new Command("flisk-import")
     );
     const envFile = relative(process.cwd(), join(writes.projectRoot, ".env")) || ".env";
     console.log("\nNext:");
-    if (plan.services.some((s) => s.envKeys.length))
+    const copied = Object.keys(writes.env.add);
+    if (copied.length)
       console.log(
-        `  - Put the environment values these services need in ${envFile}; values in docker-compose.yml were not copied.`,
+        `  - Copied ${copied.length} environment value(s) from docker-compose.yml to ${envFile} (gitignored).`,
       );
+    if (writes.items.some((item) => item.notes.some((note) => note.startsWith("no literal value"))))
+      console.log(`  - Add the values listed above as missing to ${envFile}.`);
     console.log(
       `  - Run \`flisk up\` with Flisk core ${MIN_CORE_VERSION} or later. The import did not start anything.`,
     );

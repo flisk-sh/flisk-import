@@ -46,6 +46,25 @@ function envNames(environment: unknown): string[] {
   return isObj(environment) ? Object.keys(environment) : [];
 }
 
+/** Literal environment values; interpolated ones (`${VAR}`) and empty entries are left for the user. */
+function envValues(environment: unknown): Record<string, string> {
+  const pairs: [string, unknown][] = Array.isArray(environment)
+    ? environment
+        .filter((e): e is string => typeof e === "string" && e.includes("="))
+        .map((e) => [e.slice(0, e.indexOf("=")), e.slice(e.indexOf("=") + 1)])
+    : isObj(environment)
+      ? Object.entries(environment)
+      : [];
+  const out: Record<string, string> = {};
+  for (const [key, raw] of pairs) {
+    if (raw === null || raw === undefined || typeof raw === "object") continue;
+    const value = String(raw);
+    if (value.includes("${") || value.includes("\n")) continue;
+    out[key] = value;
+  }
+  return out;
+}
+
 function commandOf(command: unknown): string | undefined {
   if (typeof command === "string") return command;
   if (Array.isArray(command) && command.every((c) => typeof c === "string"))
@@ -191,6 +210,7 @@ registerDetector({
           : [];
       const command = commandOf(raw.command);
       const envKeys = envNames(raw.environment);
+      const env = envValues(raw.environment);
       const foundHealthPath = healthPathOf(raw.healthcheck);
       const healthCheckPath =
         foundHealthPath && HEALTH_CHECK_PATH_PATTERN.test(foundHealthPath)
@@ -225,6 +245,7 @@ registerDetector({
         ...(healthCheckPath ? { healthCheckPath } : {}),
         exposeViaProxy,
         ...(envKeys.length ? { envKeys } : {}),
+        ...(Object.keys(env).length ? { env } : {}),
         ...(dependsOn.length ? { dependsOn } : {}),
         confidence: "high",
         sources: [base],

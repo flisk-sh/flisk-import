@@ -92,7 +92,7 @@ describe.each(names)("corpus: %s", (name) => {
       expect(m.stack, svc).toBe(name);
       expect(m.appType, svc).toBe("bring-your-own");
       expect(
-        Number.isInteger(m.port) && (m.port as number) >= 1024 && (m.port as number) <= 65535,
+        Number.isInteger(m.port) && (m.port as number) >= 1 && (m.port as number) <= 65535,
         `${svc} port`,
       ).toBe(true);
       if (m.healthCheckPath !== undefined)
