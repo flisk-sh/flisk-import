@@ -52,13 +52,13 @@ describe("root Compose import", () => {
     });
     const plan = buildPlan(root);
     expect(plan.files).toEqual(["docker-compose.yml"]);
-    expect(plan.services.map((s) => s.name).sort()).toEqual(["api", "db-svc"]);
+    expect(plan.services.map((s) => s.name).sort()).toEqual(["api", "db"]);
     expect(plan.services.find((s) => s.name === "api")).toMatchObject({
       dir: "api",
       dockerfile: "Dockerfile",
       port: 4000,
       healthCheckPath: "/health",
-      dependsOn: ["db-svc"],
+      dependsOn: ["db"],
     });
     expect(plan.services.map((s) => s.name)).not.toContain("ignored");
   });
@@ -74,13 +74,13 @@ describe("root Compose import", () => {
 
     applyWrites(writes);
     const api = JSON.parse(readFileSync(serviceJson("api"), "utf8"));
-    const db = JSON.parse(readFileSync(serviceJson("db-svc"), "utf8"));
+    const db = JSON.parse(readFileSync(serviceJson("db"), "utf8"));
     expect(api).toMatchObject({
       stack: "shop",
       appType: "bring-your-own",
       port: 4000,
       healthCheckPath: "/health",
-      dependsOn: ["db-svc"],
+      dependsOn: ["db"],
       buildContext: "../../../api",
       dockerfile: "Dockerfile",
     });
@@ -157,31 +157,44 @@ describe("Compose values Flisk cannot take as they are", () => {
     return { p, writes, manifest, text: formatPlan(p, writes) };
   };
 
-  it("routes an HTTP service on 8080 and assigns an in-range port", () => {
+  it("routes an HTTP service on 8080 and keeps its container port", () => {
     const { manifest, text } = plan(
       "services:\n  web:\n    image: example/web:1\n    ports: ['80:8080']\n",
     );
     expect(manifest("web")).toMatchObject({
       appType: "bring-your-own",
-      port: 4000,
+      port: 8080,
       healthCheckPath: "/",
     });
     expect(manifest("web")).not.toHaveProperty("exposeViaProxy");
     expect(text).toContain("proxy:     routed through Traefik");
     expect(text).toContain("health:    / (assumed)");
-    expect(text).toContain(
-      "Compose port 8080 is outside 4000-5999 or already used; assigned 4000. The container must listen on $PORT (4000)",
-    );
+    expect(text).not.toContain("must listen on $PORT");
   });
 
-  it("assigns a port for a privileged Compose port and says the container must read PORT", () => {
+  it("keeps a privileged Compose port: it is the port inside the container", () => {
     const { manifest, text } = plan(
       "services:\n  web:\n    image: nginx:1.27\n    ports: ['8080:80']\n",
     );
-    expect(manifest("web").port).toBe(4000);
-    expect(text).toContain(
-      "Compose port 80 is outside 4000-5999 or already used; assigned 4000. The container must listen on $PORT (4000)",
+    expect(manifest("web").port).toBe(80);
+    expect(text).not.toContain("must listen on $PORT");
+  });
+
+  it("keeps two services on one container port: each has its own container", () => {
+    const { manifest } = plan(
+      "services:\n  db:\n    image: postgres:16\n    ports: ['5432:5432']\n  analytics-db:\n    image: postgres:16\n    ports: ['5433:5432']\n",
     );
+    expect(manifest("db").port).toBe(5432);
+    expect(manifest("analytics-db").port).toBe(5432);
+  });
+
+  it("assigns a placeholder port and keeps the service private when Compose names no single port", () => {
+    const { manifest, text } = plan(
+      "services:\n  web:\n    image: example/web:1\n    ports: ['8080:80', '8443:443']\n",
+    );
+    expect(manifest("web").port).toBe(4000);
+    expect(manifest("web").exposeViaProxy).toBe(false);
+    expect(text).toContain("no single HTTP container port could be identified");
   });
 
   it("builds from the Dockerfile when Compose gives both build and image, and notes that image is not written", () => {
@@ -213,9 +226,9 @@ describe("Compose values Flisk cannot take as they are", () => {
       ].join("\n"),
     );
     expect(writes.items.map((i) => i.service.name)).toEqual(["api"]);
-    expect(writes.rejected[0]).toMatchObject({ name: "db-svc" });
+    expect(writes.rejected[0]).toMatchObject({ name: "db" });
     expect(text).toContain(
-      'not written: db-svc: image "postgres:${PG_VERSION:-16}" uses Compose variables',
+      'not written: db: image "postgres:${PG_VERSION:-16}" uses Compose variables',
     );
     expect(manifest("api")).not.toHaveProperty("dependsOn");
     expect(text).toContain("dependsOn not written, not in this import: db");
@@ -348,7 +361,7 @@ describe("health path for non-HTTP services", () => {
     const plan = buildPlan(root);
     applyWrites(planWrites(plan, false));
     const api = JSON.parse(readFileSync(serviceJson("api"), "utf8"));
-    const db = JSON.parse(readFileSync(serviceJson("db-svc"), "utf8"));
+    const db = JSON.parse(readFileSync(serviceJson("db"), "utf8"));
     expect(api.healthCheckPath).toBe("/health");
     expect(db).not.toHaveProperty("healthCheckPath");
   });
@@ -371,9 +384,9 @@ describe("service names that normalise to the same value", () => {
     });
     const plan = buildPlan(root);
     const names = plan.services.map((s) => s.name).sort();
-    expect(names).toEqual(["api", "db-svc", "db-svc-2"]);
+    expect(names).toEqual(["api", "db", "db-svc"]);
     const api = plan.services.find((s) => s.name === "api");
-    expect(api?.dependsOn.sort()).toEqual(["db-svc", "db-svc-2"]);
+    expect(api?.dependsOn.sort()).toEqual(["db", "db-svc"]);
   });
 
   it("reports renamed services in the plan while leaving matching names unnoted", () => {
@@ -401,5 +414,63 @@ describe("service names that normalise to the same value", () => {
     expect(text).toContain(
       'note:      renamed from "My_API" (Compose names must be lowercase kebab-case)',
     );
+  });
+});
+
+describe("environment from Compose", () => {
+  const compose = [
+    "services:",
+    "  api:",
+    "    image: example/api:1",
+    "    ports: ['3000:3000']",
+    "    environment:",
+    "      DATABASE_URL: postgres://app:example@db:5432/app",
+    "      API_TOKEN: ${API_TOKEN}",
+    "      lower_case: x",
+    "  db:",
+    "    image: postgres:16",
+    "    environment:",
+    "      - POSTGRES_PASSWORD=example",
+    "",
+  ].join("\n");
+
+  it("writes names as secrets and literal values to the gitignored project .env", () => {
+    tree({ "docker-compose.yml": compose, ".env": "API_TOKEN=keep-me\n" });
+    const writes = planWrites(buildPlan(root), false);
+    applyWrites(writes);
+    const api = JSON.parse(readFileSync(serviceJson("api"), "utf8"));
+    const db = JSON.parse(readFileSync(serviceJson("db"), "utf8"));
+    expect(api.secrets).toEqual({ required: ["API_TOKEN", "DATABASE_URL"] });
+    expect(db.secrets).toEqual({ required: ["POSTGRES_PASSWORD"] });
+    expect(readFileSync(serviceJson("api"), "utf8")).not.toContain("postgres://");
+
+    const env = readFileSync(join(root, ".env"), "utf8");
+    expect(env).toContain("API_TOKEN=keep-me\n");
+    expect(env).not.toContain("${API_TOKEN}");
+    expect(env).toContain("DATABASE_URL=postgres://app:example@db:5432/app\n");
+    expect(env).toContain("POSTGRES_PASSWORD=example\n");
+    expect(readFileSync(join(root, ".gitignore"), "utf8").split("\n")).toContain(".env");
+
+    const api_item = writes.items.find((i) => i.service.name === "api");
+    expect(api_item?.notes.join("\n")).toContain(
+      "environment names not written (Flisk accepts A-Z, 0-9 and _): lower_case",
+    );
+  });
+
+  it("names a value it could not copy", () => {
+    tree({ "docker-compose.yml": compose });
+    const writes = planWrites(buildPlan(root), false);
+    const api = writes.items.find((i) => i.service.name === "api");
+    expect(api?.notes).toContain(
+      "no literal value in docker-compose.yml for API_TOKEN; add it to the project .env",
+    );
+    expect(writes.env.add).not.toHaveProperty("API_TOKEN");
+  });
+
+  it("does not touch .env or .gitignore on a dry plan", () => {
+    tree({ "docker-compose.yml": compose });
+    planWrites(buildPlan(root), false);
+    expect(existsSync(join(root, ".env"))).toBe(false);
+    expect(existsSync(join(root, ".gitignore"))).toBe(false);
   });
 });

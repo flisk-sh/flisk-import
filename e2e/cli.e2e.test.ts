@@ -43,28 +43,33 @@ describe("flisk-import (built CLI)", () => {
     expect(existsSync(join(repo, ".flisk"))).toBe(false);
   });
 
-  it("--yes writes one manifest per service, dependency wiring, and project setup without env values", () => {
+  it("--yes writes one manifest per service, dependency wiring, project setup, and env values to the gitignored .env", () => {
     const r = run(["shop", "--yes"]);
     expect(r.code).toBe(0);
     expect(manifest("api")).toMatchObject({
       appType: "bring-your-own",
       stack: "shop",
-      dependsOn: ["db-svc"],
+      dependsOn: ["db"],
       buildContext: "../../../api",
       dockerfile: "Dockerfile",
-      port: 4001,
+      port: 4000,
+      secrets: { required: ["DATABASE_URL"] },
       healthCheckPath: "/health",
     });
     // A "worker" ignores `image`; only bring-your-own runs the Compose image.
-    expect(manifest("db-svc")).toMatchObject({
+    expect(manifest("db")).toMatchObject({
       appType: "bring-your-own",
       image: "postgres:16",
       exposeViaProxy: false,
     });
-    expect(manifest("db-svc")).not.toHaveProperty("healthCheckPath");
+    expect(manifest("db")).not.toHaveProperty("healthCheckPath");
     expect(r.out).toContain("Next:");
-    expect(r.out).toContain("shop/.env; values in docker-compose.yml were not copied");
-    expect(r.out).toContain("Run `flisk up` with Flisk core 1.3.145 or later");
+    expect(r.out).toContain("Copied 1 environment value(s) from docker-compose.yml to");
+    expect(readFileSync(join(repo, ".env"), "utf8")).toContain(
+      "DATABASE_URL=postgres://secret@db/app\n",
+    );
+    expect(readFileSync(join(repo, ".gitignore"), "utf8").split("\n")).toContain(".env");
+    expect(r.out).toContain("Run `flisk up` with Flisk core 1.4.11 or later");
     expect(JSON.stringify(manifest("api"))).not.toContain("postgres://");
     expect(existsSync(join(repo, ".flisk", "project.json"))).toBe(true);
   });

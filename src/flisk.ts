@@ -5,11 +5,12 @@ import { dirname, join, resolve } from "node:path";
 export const SERVICE_MANIFEST_SCHEMA_VERSION = 1;
 export const SERVICE_MANIFEST_SCHEMA_URL = "https://flisk.sh/schema.service.json";
 /**
- * Oldest Flisk core that starts an imported project: 1.3.104 added `buildContext`, and 1.3.145
- * (flisk#1018) bootstraps a project that has `.flisk/project.json` but no Tiltfile yet.
- * Stated, not checked: the importer does not read the installed core version.
+ * Oldest Flisk core that starts an imported project: 1.3.104 added `buildContext`, 1.3.145
+ * (flisk#1018) bootstraps a project that has `.flisk/project.json` but no Tiltfile yet, and the
+ * release after 1.4.10 (flisk#2646) accepts a bring-your-own port outside 4000-5999 and two-letter
+ * names, which this importer now writes. Stated, not checked: it does not read the installed version.
  */
-export const MIN_CORE_VERSION = "1.3.145";
+export const MIN_CORE_VERSION = "1.4.11";
 /** Flisk's bring-your-own port range. */
 export const BYO_PORT_RANGE = { min: 4000, max: 5999, label: "4000-5999" } as const;
 

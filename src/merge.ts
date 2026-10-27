@@ -22,6 +22,8 @@ export interface MergedService {
   exposeViaProxy?: boolean;
   language?: "bun" | "node";
   envKeys: string[];
+  /** Literal values for envKeys, from the highest-precedence source that states one. */
+  env: Record<string, string>;
   dependsOn: string[];
   conflicts: Conflict[];
   sources: Source[];
@@ -42,9 +44,10 @@ function slug(raw: string): string {
 
 export function toResourceName(raw: string): string {
   let name = slug(raw) || "svc";
-  // Resource names must start with a letter and be at least 3 characters (service schema).
+  // Resource names must start with a letter and be at least 2 characters (service schema), so a
+  // Compose name such as `db` is kept and stays the container's hostname.
   if (!/^[a-z]/.test(name)) name = `svc-${name}`;
-  if (name.length < 3) name = `${name}-svc`;
+  if (name.length < 2) name = `${name}-svc`;
   return name;
 }
 
@@ -97,6 +100,7 @@ function mergeGroup(
     dir,
     kind: (ordered[0] as Candidate).kind,
     envKeys: [...new Set(ordered.flatMap((c) => c.envKeys ?? []))].sort(),
+    env: Object.assign({}, ...[...ordered].reverse().map((c) => c.env ?? {})),
     dependsOn: [...new Set(ordered.flatMap((c) => (c.dependsOn ?? []).map(resolve)))].sort(),
     exposeViaProxy: ordered.find((c) => c.exposeViaProxy !== undefined)?.exposeViaProxy,
     procfileCommands: ordered.flatMap((c) =>

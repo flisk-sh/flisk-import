@@ -16,12 +16,12 @@ Each Compose service becomes `services/<stack>/<service>/service.json`, where th
 | --- | --- |
 | `build` (context inside `dir`) | `buildContext` pointing at the original directory, `dockerfile` (default `Dockerfile`). With `build` and `image`, Flisk builds; it does not pull the tag. |
 | `image` (no `build`) | `image` |
-| one published container port in 4000-5999 (and not already used) | `port`, unchanged, because the image already listens there. |
-| a container port outside 4000-5999 (for example 80, 3000 or 8080) or already used | a free port from 4000-5999 (noted in the plan, e.g. `Compose port 3000 is outside 4000-5999 or already used; assigned 4000`). The container must listen on `$PORT`, or it will not answer. |
+| one published container port (for example 80, 3000, 5432 or 8080) | `port`, unchanged, because the image already listens there. A bring-your-own port is the port inside its own container: nothing is published on your machine and Traefik reaches it on the stack network, so two services may both use 5432. |
+| no single container port | a placeholder port from 4000-5999, and the service stays private (no route). |
 | HTTP URL in `healthcheck.test` | `healthCheckPath`. Without one, `/` is assumed and the plan says so. |
 | HTTP URL, `host:port/path` or `localhost/path` in `healthcheck.test` | `healthCheckPath`. When no path can be read, `/` is assumed and the plan says so. |
 | `depends_on` | `dependsOn`, limited to services in this import |
-| `environment` | names in the plan only; values are never written |
+| `environment` | names in `secrets.required`; literal values appended to the project `.env` (added to `.gitignore`). Keys already in `.env` are kept; `${VAR}` values and names Flisk rejects (lowercase) are listed in the plan instead. |
 
 Every imported service is `appType: "bring-your-own"`. A service whose port is 22, 25, 1883, 2181, 3306, 5432, 5672, 6379, 9092, 9200, 11211 or 27017, or that publishes no single port, is private: `exposeViaProxy: false`, no Traefik route, no health path. Any other single port, including 8000 and 8080, gets a Traefik route.
 
@@ -38,8 +38,8 @@ The plan names each of these. Nothing below is guessed.
 
 ## Before `flisk up`
 
-1. Put the environment values the services need in the project `.env`. Values in `docker-compose.yml` were not copied.
-2. Use Flisk core **1.3.145 or later**. 1.3.104 added `buildContext` ([flisk#525](https://github.com/flisk-sh/flisk/pull/525)); 1.3.145 starts a project that has `.flisk/project.json` but no Tiltfile yet ([flisk#1018](https://github.com/flisk-sh/flisk/pull/1018)). The importer does not check the installed version.
+1. Check the project `.env`: the import copied literal values from `docker-compose.yml` and lists any it could not (`${VAR}` values).
+2. Use Flisk core **1.4.11 or later**. 1.3.104 added `buildContext` ([flisk#525](https://github.com/flisk-sh/flisk/pull/525)); 1.3.145 starts a project that has `.flisk/project.json` but no Tiltfile yet ([flisk#1018](https://github.com/flisk-sh/flisk/pull/1018)); the release after 1.4.10 accepts a bring-your-own port outside 4000-5999 and two-letter names ([flisk#2646](https://github.com/flisk-sh/flisk/pull/2646)). The importer does not check the installed version.
 3. Flisk injects its own `PORT`, `DATABASE_URL` and a `Host: <service>.<project>.localhost` header. An app that validates its host or reads `DATABASE_URL` may need configuration that Compose did not.
 
 The command exits 1 when nothing could be imported (an unreadable file, or every service skipped).
