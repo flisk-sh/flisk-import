@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 
 /** Manifest constants of the Flisk service.json this tool writes. */
 export const SERVICE_MANIFEST_SCHEMA_VERSION = 1;
@@ -11,6 +11,11 @@ export const SERVICE_MANIFEST_SCHEMA_URL = "https://flisk.sh/schema.service.json
  * names, which this importer now writes. Stated, not checked: it does not read the installed version.
  */
 export const MIN_CORE_VERSION = "1.4.11";
+/**
+ * The core change that runs a registered Tiltfile (`orchestration.source: "tiltfile"`) from `flisk up`. Stated, not
+ * checked, like MIN_CORE_VERSION.
+ */
+export const TILTFILE_CORE = "flisk-sh/flisk#2849";
 /** Flisk's bring-your-own port range. */
 export const BYO_PORT_RANGE = { min: 4000, max: 5999, label: "4000-5999" } as const;
 
@@ -44,4 +49,34 @@ export function findProjectRoot(start: string): string | null {
     if (parent === dir) return null;
     dir = parent;
   }
+}
+
+/**
+ * The minimal `.flisk/project.json` an import writes when the repo is not a Flisk project yet: the given stacks in
+ * Pre-Alpha, no optional infrastructure, and discovery of every `services/<stack>/<name>` folder. A copy of the minimum
+ * Flisk accepts today, so it can drift from flisk.
+ */
+export function defaultProjectConfig(
+  projectRoot: string,
+  preAlpha: { description: string; enabledStacks: string[] },
+): Record<string, unknown> {
+  return {
+    version: "1.0",
+    project: { name: basename(projectRoot), version: "1.0.0" },
+    phases: {
+      pre_alpha: { name: "Pre-Alpha", ...preAlpha },
+      alpha: { name: "Alpha", description: "", enabledStacks: [] },
+      beta: { name: "Beta", description: "", enabledStacks: [] },
+      out_of_scope: { name: "Out of Scope", description: "", enabledStacks: [] },
+    },
+    optional_infra: {
+      monitoring: false,
+      elk: false,
+      debezium: false,
+      golden_image: false,
+      verdaccio: false,
+    },
+    discovery: { paths: ["services/*/*"] },
+    overrides: {},
+  };
 }

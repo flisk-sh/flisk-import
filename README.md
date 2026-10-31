@@ -1,6 +1,6 @@
 # flisk import
 
-Import the services in a repo's root `docker-compose.yml` into [Flisk](https://github.com/flisk-sh/flisk) as `service.json` files. This is the Compose first tier of flisk-sh/flisk#511.
+Import the services in a repo's root `docker-compose.yml` into [Flisk](https://github.com/flisk-sh/flisk) as `service.json` files, or register the repo's own Tiltfile so `flisk up` runs it. This is the Compose first tier of flisk-sh/flisk#511.
 
 ```bash
 flisk import . --dry-run     # plan only
@@ -19,6 +19,24 @@ flisk import . --yes         # write service.json files and project setup
 - **Exit codes:** `0` when the plan succeeds (`--dry-run`, files written, or all `service.json` files already exist), `1` when no root `docker-compose.yml` or mappable service is found, and `2` when the write prompt is declined or closed without an answer (`Nothing written.`).
 
 See [docs/import.md](docs/import.md) for the full mapping and limits. `flisk import` is the core CLI command backed by this package.
+
+## Import a Tiltfile
+
+A repo that already runs on Tilt keeps its own Tiltfile. `flisk-import tiltfile` registers it in `.flisk/project.json`, so `flisk up` runs it unchanged.
+
+```bash
+flisk import tiltfile --dry-run          # plan only
+flisk import tiltfile                    # plan, then ask before writing
+flisk import tiltfile dev/Tiltfile --yes # a named file, or a folder that holds a Tiltfile
+```
+
+- **Path:** `[path]` defaults to `Tiltfile`; a folder means `<folder>/Tiltfile`. It is resolved from the current directory. The project root is the nearest folder with `.flisk/project.json`, else the current directory.
+- **Writes:** only `.flisk/project.json`, with `"orchestration": { "source": "tiltfile", "path": "<path from the project root>" }`. Every other key is kept. Without a `project.json`, it creates the same minimal one as the Compose import, with only the proxy stack. It never edits the Tiltfile.
+- **Refuses (exit 1):** a missing Tiltfile, a path inside `.flisk/`, a path with a quote or control character, and a `project.json` that already sets `orchestration` (pass `--force` to replace it).
+- **Exit codes:** the same as the Compose import: `0` for `--dry-run` or a write, `1` for a refusal, `2` when the prompt is declined or closed (`Nothing written.`).
+- **Needs** a Flisk core that runs an imported Tiltfile ([flisk#2849](https://github.com/flisk-sh/flisk/pull/2849)). The importer does not check the core version.
+
+Plain `flisk-import [dir]` is still the Compose import. To import Compose from a folder named `tiltfile`, write `flisk-import ./tiltfile`.
 
 ```bash
 bun install && bun run build && bun run test

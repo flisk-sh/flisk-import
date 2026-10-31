@@ -3,6 +3,7 @@ import { basename, dirname, join, relative, resolve } from "node:path";
 import { ImportError } from "./errors.js";
 import {
   BYO_PORT_RANGE,
+  defaultProjectConfig,
   findProjectRoot,
   IMAGE_PATTERN,
   SERVICE_MANIFEST_SCHEMA_URL,
@@ -87,29 +88,10 @@ export function planWrites(plan: ImportPlan, force: boolean): WritePlan {
     : {
         path: projectConfigPath,
         content: `${JSON.stringify(
-          {
-            version: "1.0",
-            project: { name: basename(projectRoot), version: "1.0.0" },
-            phases: {
-              pre_alpha: {
-                name: "Pre-Alpha",
-                description: "Flisk proxy and imported Compose services",
-                enabledStacks: ["proxy", stack],
-              },
-              alpha: { name: "Alpha", description: "", enabledStacks: [] },
-              beta: { name: "Beta", description: "", enabledStacks: [] },
-              out_of_scope: { name: "Out of Scope", description: "", enabledStacks: [] },
-            },
-            optional_infra: {
-              monitoring: false,
-              elk: false,
-              debezium: false,
-              golden_image: false,
-              verdaccio: false,
-            },
-            discovery: { paths: ["services/*/*"] },
-            overrides: {},
-          },
+          defaultProjectConfig(projectRoot, {
+            description: "Flisk proxy and imported Compose services",
+            enabledStacks: ["proxy", stack],
+          }),
           null,
           2,
         )}\n`,
