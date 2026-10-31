@@ -1,6 +1,15 @@
 import { basename } from "node:path/posix";
 import { precedence } from "./registry.js";
-import type { Candidate, CandidateKind, Confidence, Skip, Source } from "./types.js";
+import type {
+  Candidate,
+  CandidateKind,
+  Confidence,
+  ContainerOptions,
+  ExtraPort,
+  Skip,
+  Source,
+  VolumeMount,
+} from "./types.js";
 
 export interface Conflict {
   field: "image" | "dockerfile" | "command" | "port" | "language" | "healthCheckPath";
@@ -25,6 +34,12 @@ export interface MergedService {
   /** Literal values for envKeys, from the highest-precedence source that states one. */
   env: Record<string, string>;
   dependsOn: string[];
+  container?: ContainerOptions;
+  extraPorts?: ExtraPort[];
+  /** Resource name of the service whose network this one shares. */
+  sidecarOf?: string;
+  volumes?: VolumeMount[];
+  restart?: Candidate["restart"];
   conflicts: Conflict[];
   sources: Source[];
   confidence: Confidence;
@@ -86,6 +101,14 @@ function rank(candidate: Candidate): number {
   return Math.min(...candidate.sources.map((s) => precedence(s.detector)));
 }
 
+function firstOf<K extends "container" | "extraPorts" | "volumes" | "restart">(
+  ordered: Candidate[],
+  key: K,
+): Partial<Pick<Candidate, K>> {
+  const holder = ordered.find((c) => c[key] !== undefined);
+  return holder ? ({ [key]: holder[key] } as Partial<Pick<Candidate, K>>) : {};
+}
+
 function mergeGroup(
   name: string,
   dir: string,
@@ -103,6 +126,14 @@ function mergeGroup(
     env: Object.assign({}, ...[...ordered].reverse().map((c) => c.env ?? {})),
     dependsOn: [...new Set(ordered.flatMap((c) => (c.dependsOn ?? []).map(resolve)))].sort(),
     exposeViaProxy: ordered.find((c) => c.exposeViaProxy !== undefined)?.exposeViaProxy,
+    // Only Compose states these, so the first source that has one wins.
+    ...firstOf(ordered, "container"),
+    ...firstOf(ordered, "extraPorts"),
+    ...firstOf(ordered, "volumes"),
+    ...firstOf(ordered, "restart"),
+    ...(ordered.find((c) => c.sidecarOf)?.sidecarOf
+      ? { sidecarOf: resolve(ordered.find((c) => c.sidecarOf)?.sidecarOf as string) }
+      : {}),
     procfileCommands: ordered.flatMap((c) =>
       c.sources.some((source) => source.detector === "procfile") && c.command ? [c.command] : [],
     ),
@@ -147,6 +178,7 @@ export function mergeCandidates(candidates: Candidate[], rootName: string): Merg
   const table = assignResourceNames([
     ...candidates.flatMap((c) => (c.name === undefined ? [] : [c.name])),
     ...candidates.flatMap((c) => c.dependsOn ?? []),
+    ...candidates.flatMap((c) => (c.sidecarOf ? [c.sidecarOf] : [])),
     ...candidates.flatMap((c) => (c.name === undefined ? [basename(c.dir) || rootName] : [])),
   ]);
   const resolve = (raw: string) => table.get(raw) ?? toResourceName(raw);

@@ -3,7 +3,7 @@ import { dirname, isAbsolute, join, normalize } from "node:path/posix";
 import { isAlias, isMap, type Node, parseDocument, visit } from "yaml";
 import { HEALTH_CHECK_PATH_PATTERN } from "../flisk.js";
 import { registerDetector } from "../registry.js";
-import type { Candidate, Skip } from "../types.js";
+import type { Candidate, ContainerOptions, ExtraPort, Skip, VolumeMount } from "../types.js";
 
 type Obj = Record<string, unknown>;
 const isObj = (v: unknown): v is Obj => typeof v === "object" && v !== null && !Array.isArray(v);
@@ -25,8 +25,10 @@ const NON_HTTP_PORTS = new Set([
 
 /**
  * Service keys this detector translates. Every other key is named in the report: Flisk runs a
- * bring-your-own container without volumes, command overrides, env files and the rest.
- * `healthcheck` only contributes an HTTP path; `environment` only contributes names.
+ * bring-your-own container without command overrides, env files and the rest.
+ * `healthcheck` only contributes an HTTP path; `environment` only contributes names. The runtime keys
+ * (capabilities, volumes, network_mode, restart) map onto service.json fields; a value that cannot be
+ * carried over is named on its own line instead.
  */
 const TRANSLATED_KEYS = new Set([
   "image",
@@ -35,7 +37,133 @@ const TRANSLATED_KEYS = new Set([
   "environment",
   "depends_on",
   "healthcheck",
+  "cap_add",
+  "cap_drop",
+  "init",
+  "read_only",
+  "user",
+  "security_opt",
+  "shm_size",
+  "network_mode",
+  "volumes",
+  "restart",
 ]);
+
+const CAPABILITY = /^[A-Z_]+$/;
+const USER = /^[A-Za-z0-9_.:-]+$/;
+const SECURITY_OPT = /^[A-Za-z0-9_.:=/-]+$/;
+const VOLUME_NAME = /^[a-z0-9][a-z0-9_-]*$/;
+const CONTAINER_PATH = /^\/[A-Za-z0-9_./-]*$/;
+const HOST_PATH = /^[A-Za-z0-9_./-]+$/;
+const RESTART = new Set(["no", "on-failure", "unless-stopped", "always"]);
+
+/** Compose `shm_size` as a size string such as 256mb; a number is bytes. */
+function shmSizeOf(value: unknown): string | undefined {
+  if (typeof value === "number" && Number.isInteger(value) && value > 0) return `${value}b`;
+  if (typeof value === "string" && /^[0-9]+([bkmg]b?)?$/i.test(value)) return value;
+  return undefined;
+}
+
+/** `container` for service.json, and the values that could not be carried over. */
+function containerOf(raw: Obj): { container?: ContainerOptions; dropped: string[] } {
+  const container: ContainerOptions = {};
+  const dropped: string[] = [];
+  for (const [key, field] of [
+    ["cap_add", "capAdd"],
+    ["cap_drop", "capDrop"],
+  ] as const) {
+    if (raw[key] === undefined) continue;
+    const caps = Array.isArray(raw[key]) ? (raw[key] as unknown[]) : [];
+    const kept = caps.filter((c): c is string => typeof c === "string" && CAPABILITY.test(c));
+    if (kept.length !== caps.length || caps.length === 0) dropped.push(key);
+    if (kept.length) container[field] = kept;
+  }
+  if (raw.init !== undefined) {
+    if (typeof raw.init === "boolean") container.init = raw.init;
+    else dropped.push("init");
+  }
+  if (raw.read_only !== undefined) {
+    if (typeof raw.read_only === "boolean") container.readOnly = raw.read_only;
+    else dropped.push("read_only");
+  }
+  if (raw.user !== undefined) {
+    const user = typeof raw.user === "number" ? String(raw.user) : raw.user;
+    if (typeof user === "string" && USER.test(user)) container.user = user;
+    else dropped.push("user");
+  }
+  if (raw.security_opt !== undefined) {
+    const opts = Array.isArray(raw.security_opt) ? raw.security_opt : [];
+    const kept = opts.filter((o): o is string => typeof o === "string" && SECURITY_OPT.test(o));
+    if (kept.length !== opts.length || opts.length === 0) dropped.push("security_opt");
+    if (kept.length) container.securityOpt = kept;
+  }
+  if (raw.shm_size !== undefined) {
+    const size = shmSizeOf(raw.shm_size);
+    if (size) container.shmSize = size;
+    else dropped.push("shm_size");
+  }
+  return { ...(Object.keys(container).length ? { container } : {}), dropped };
+}
+
+/** One published port: container port, host port when Compose names a literal one, and protocol. */
+function publishedPort(entry: unknown): ExtraPort | undefined {
+  const port = containerPort(entry);
+  if (port === undefined) return undefined;
+  let host: number | undefined;
+  let protocol: "tcp" | "udp" = "tcp";
+  if (isObj(entry)) {
+    const published =
+      typeof entry.published === "string" ? Number(entry.published) : entry.published;
+    if (typeof published === "number" && Number.isInteger(published)) host = published;
+    if (entry.protocol === "udp") protocol = "udp";
+  } else if (typeof entry === "string") {
+    const [mapping, proto] = entry.split("/");
+    if (proto === "udp") protocol = "udp";
+    const parts = (mapping ?? "").split(":");
+    const hostPart = parts.length >= 2 ? parts[parts.length - 2] : undefined;
+    if (hostPart && /^\d+$/.test(hostPart)) host = Number.parseInt(hostPart, 10);
+  }
+  return {
+    port,
+    ...(host !== undefined && host >= 1 && host <= 65535 && host !== port
+      ? { hostPort: host }
+      : {}),
+    ...(protocol === "udp" ? { protocol } : {}),
+  };
+}
+
+/** One `volumes:` entry. Bind sources are resolved against the Compose file's directory. */
+function volumeOf(entry: unknown, composeDir: string): VolumeMount | undefined {
+  let source: unknown;
+  let target: unknown;
+  let readOnly = false;
+  let type: unknown;
+  if (typeof entry === "string") {
+    const parts = entry.split(":");
+    if (parts.length < 2 || parts.length > 3) return undefined;
+    [source, target] = parts;
+    readOnly = parts[2] === "ro";
+    if (parts[2] !== undefined && parts[2] !== "ro" && parts[2] !== "rw") return undefined;
+  } else if (isObj(entry)) {
+    ({ source, target, type } = entry);
+    readOnly = entry.read_only === true;
+    if (type !== undefined && type !== "volume" && type !== "bind") return undefined;
+  } else {
+    return undefined;
+  }
+  if (typeof source !== "string" || typeof target !== "string" || !CONTAINER_PATH.test(target))
+    return undefined;
+  const bind = type === "bind" || source.startsWith(".") || source.startsWith("/");
+  if (!bind) {
+    return VOLUME_NAME.test(source)
+      ? { source, target, ...(readOnly ? { readOnly } : {}), bind }
+      : undefined;
+  }
+  if (isAbsolute(source) || !HOST_PATH.test(source)) return undefined;
+  const resolved = normalize(join(composeDir, source));
+  if (resolved === ".." || resolved.startsWith("../")) return undefined;
+  return { source: resolved, target, ...(readOnly ? { readOnly } : {}), bind };
+}
 
 function envNames(environment: unknown): string[] {
   if (Array.isArray(environment)) {
@@ -195,12 +323,12 @@ registerDetector({
       if (ports.length > 1 && selectedPort === undefined) {
         skips.push({
           ...base,
-          reason: `service "${name}" lists several ports (${ports.join(", ")}); no single HTTP container port could be identified`,
+          reason: `service "${name}" lists several ports (${ports.join(", ")}); no single HTTP container port could be identified, so none is routed (all are published on 127.0.0.1 as extraPorts)`,
         });
       } else if (ports.length > 1) {
         skips.push({
           ...base,
-          reason: `service "${name}" publishes extra container ports (${ports.filter((port) => port !== selectedPort).join(", ")}); Flisk routes only ${selectedPort}`,
+          reason: `service "${name}" publishes extra container ports (${ports.filter((port) => port !== selectedPort).join(", ")}); Flisk routes only ${selectedPort} and publishes the others on 127.0.0.1 as extraPorts`,
         });
       }
       const dependsOn = Array.isArray(raw.depends_on)
@@ -220,6 +348,49 @@ registerDetector({
         skips.push({
           ...base,
           reason: `service "${name}" health path "${foundHealthPath}" has characters Flisk does not accept (only a-z, 0-9, / and -); not used`,
+        });
+      }
+      const { container, dropped } = containerOf(raw);
+      for (const key of dropped) {
+        skips.push({
+          ...base,
+          reason: `service "${name}" ${key} ${JSON.stringify(raw[key])} has values Flisk does not accept; not used`,
+        });
+      }
+      // Every published port Flisk does not route stays published, on 127.0.0.1 (service.json extraPorts).
+      const extraPorts = (Array.isArray(raw.ports) ? raw.ports : [])
+        .map(publishedPort)
+        .filter((p): p is ExtraPort => p !== undefined && p.port !== selectedPort);
+      let sidecarOf: string | undefined;
+      if (raw.network_mode !== undefined) {
+        const mode = typeof raw.network_mode === "string" ? raw.network_mode : "";
+        if (mode.startsWith("service:") && mode.length > "service:".length) {
+          sidecarOf = mode.slice("service:".length);
+        } else {
+          skips.push({
+            ...base,
+            reason: `service "${name}" network_mode "${mode}" is not translated; Flisk only shares another service's network (service:<name>)`,
+          });
+        }
+      }
+      const volumes: VolumeMount[] = [];
+      for (const entry of Array.isArray(raw.volumes) ? raw.volumes : []) {
+        const volume = volumeOf(entry, composeDir);
+        if (volume) volumes.push(volume);
+        else
+          skips.push({
+            ...base,
+            reason: `service "${name}" volume ${JSON.stringify(entry)} is not translated (an anonymous volume, a path outside the imported directory, or Compose variables); not mounted`,
+          });
+      }
+      const restart =
+        typeof raw.restart === "string" && RESTART.has(raw.restart)
+          ? (raw.restart as Candidate["restart"])
+          : undefined;
+      if (raw.restart !== undefined && !restart) {
+        skips.push({
+          ...base,
+          reason: `service "${name}" restart ${JSON.stringify(raw.restart)} is not a policy Flisk accepts; not used`,
         });
       }
       const untranslated = Object.keys(raw).filter((key) => !TRANSLATED_KEYS.has(key));
@@ -247,6 +418,11 @@ registerDetector({
         ...(envKeys.length ? { envKeys } : {}),
         ...(Object.keys(env).length ? { env } : {}),
         ...(dependsOn.length ? { dependsOn } : {}),
+        ...(container ? { container } : {}),
+        ...(extraPorts.length ? { extraPorts } : {}),
+        ...(sidecarOf ? { sidecarOf } : {}),
+        ...(volumes.length ? { volumes } : {}),
+        ...(restart ? { restart } : {}),
         confidence: "high",
         sources: [base],
       });

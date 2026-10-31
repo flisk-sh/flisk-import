@@ -39,8 +39,41 @@ export interface Candidate {
    */
   env?: Record<string, string>;
   dependsOn?: string[];
+  /** Compose container options (cap_add, read_only, ...) as service.json `container` (Flisk 1.5, flisk#2907). */
+  container?: ContainerOptions;
+  /** Ports published next to the routed one, as service.json `extraPorts` (flisk#2909). */
+  extraPorts?: ExtraPort[];
+  /** Raw Compose name from `network_mode: service:<name>`, as service.json `sidecarOf` (flisk#2908). */
+  sidecarOf?: string;
+  /** Named volumes and bind mounts, as service.json `volumes` (flisk#1748). Bind sources are relative to the import root. */
+  volumes?: VolumeMount[];
+  restart?: "no" | "on-failure" | "unless-stopped" | "always";
   confidence: Confidence;
   sources: Source[];
+}
+
+export interface ContainerOptions {
+  capAdd?: string[];
+  capDrop?: string[];
+  init?: boolean;
+  readOnly?: boolean;
+  user?: string;
+  securityOpt?: string[];
+  shmSize?: string;
+}
+
+export interface ExtraPort {
+  port: number;
+  hostPort?: number;
+  protocol?: "tcp" | "udp";
+}
+
+export interface VolumeMount {
+  /** A volume name, or (when `bind`) a path relative to the import root. */
+  source: string;
+  target: string;
+  readOnly?: boolean;
+  bind: boolean;
 }
 
 export interface Skip {
