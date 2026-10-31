@@ -211,6 +211,37 @@ export function planWrites(plan: ImportPlan, force: boolean): WritePlan {
           dockerfile: service.dockerfile,
         }
       : { image: service.image as string };
+    // A sidecar shares another written service's network; one whose host is not written stays a normal service.
+    const sidecarOf =
+      service.sidecarOf && service.sidecarOf !== service.name && names.has(service.sidecarOf)
+        ? service.sidecarOf
+        : undefined;
+    if (service.sidecarOf && !sidecarOf)
+      notes.push(`network_mode not written: "${service.sidecarOf}" is not in this import`);
+    const extraPorts = sidecarOf ? [] : (service.extraPorts ?? []);
+    if (sidecarOf && service.extraPorts?.length)
+      notes.push(
+        `ports not written: a sidecar has none of its own; publish them on "${sidecarOf}"`,
+      );
+    if (extraPorts.length)
+      notes.push(
+        `published on 127.0.0.1 only: ${extraPorts.map((p) => `${p.hostPort ?? p.port}->${p.port}/${p.protocol ?? "tcp"}`).join(", ")}`,
+      );
+    // Bind mounts are relative to the service directory in service.json, and must stay inside the project.
+    const serviceDir = dirname(path);
+    const volumes = (service.volumes ?? []).flatMap((volume) => {
+      if (!volume.bind) return [volume];
+      const absolute = resolve(plan.root, volume.source);
+      const fromProject = relative(projectRoot, absolute).split("\\").join("/");
+      if (fromProject === ".." || fromProject.startsWith("../")) {
+        notes.push(
+          `volume ${volume.source}:${volume.target} not written: it is outside the project`,
+        );
+        return [];
+      }
+      const rel = relative(serviceDir, absolute).split("\\").join("/") || ".";
+      return [{ ...volume, source: rel.startsWith(".") ? rel : `./${rel}` }];
+    });
     const manifest: Record<string, unknown> = {
       $schema: SERVICE_MANIFEST_SCHEMA_URL,
       schemaVersion: SERVICE_MANIFEST_SCHEMA_VERSION,
@@ -223,6 +254,19 @@ export function planWrites(plan: ImportPlan, force: boolean): WritePlan {
       ...(isPrivate ? { exposeViaProxy: false } : {}),
       ...(dependsOn.length ? { dependsOn } : {}),
       ...(secretNames.length ? { secrets: { required: secretNames } } : {}),
+      ...(service.restart ? { restart: service.restart } : {}),
+      ...(service.container ? { container: service.container } : {}),
+      ...(extraPorts.length ? { extraPorts } : {}),
+      ...(sidecarOf ? { sidecarOf } : {}),
+      ...(volumes.length
+        ? {
+            volumes: volumes.map(({ source, target, readOnly }) => ({
+              source,
+              target,
+              ...(readOnly ? { readOnly } : {}),
+            })),
+          }
+        : {}),
     };
     items.push({ service, path, manifest, status, notes });
   }

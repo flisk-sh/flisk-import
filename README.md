@@ -13,9 +13,10 @@ flisk import . --yes         # write service.json files and project setup
 - **Reads one file:** the root `docker-compose.yml`. Not `compose.yaml`, override files, nested Compose files, Dockerfiles on their own, `package.json`, or Procfiles.
 - **Writes:** one bring-your-own `service.json` per Compose service, plus `.flisk/project.json` if the repo is not a Flisk project yet. It never edits the Compose file or overwrites a `service.json` without `--force`.
 - **Keeps:** the service names (`db` stays `db`, so it stays the hostname), the build context and Dockerfile (or the image), the container port as written (3000, 80, 5432), `depends_on`, and an HTTP health path. Databases and brokers are private, with no proxy route.
+- **Runtime keys:** named volumes and bind mounts inside the project (`volumes`), `cap_add`, `cap_drop`, `init`, `read_only`, `user`, `security_opt` and `shm_size` (`container`), extra published ports (`extraPorts`, on 127.0.0.1 only), `network_mode: service:<name>` (`sidecarOf`) and `restart`.
 - **Environment:** names go into `service.json` as `secrets.required`; literal values are copied to the project `.env`, which is added to `.gitignore`. Values in `.env` already are kept, and `${VAR}` values are left for you.
-- **Drops, and says so:** volumes, `command`, `env_file` and every other untranslated key; services with `profiles`, `extends`, an out-of-tree build or a `${VAR}` image.
-- **Does not start anything.** Run `flisk up` with Flisk core **1.4.11 or later**. The importer does not check the core version.
+- **Drops, and says so:** `command`, `env_file` and every other untranslated key; anonymous volumes and paths outside the project; `network_mode` other than `service:<name>`; services with `profiles`, `extends`, an out-of-tree build or a `${VAR}` image.
+- **Does not start anything.** Run `flisk up` with Flisk core **1.4.24 or later**. The importer does not check the core version.
 - **Exit codes:** `0` when the plan succeeds (`--dry-run`, files written, or all `service.json` files already exist), `1` when no root `docker-compose.yml` or mappable service is found, and `2` when the write prompt is declined or closed without an answer (`Nothing written.`).
 
 See [docs/import.md](docs/import.md) for the full mapping and limits. `flisk import` is the core CLI command backed by this package.

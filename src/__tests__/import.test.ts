@@ -293,7 +293,8 @@ describe("Compose values Flisk cannot take as they are", () => {
         "    volumes: ['./data:/data']",
       ].join("\n"),
     );
-    expect(text).toContain('service "api" keys not translated: command, env_file, volumes');
+    expect(text).toContain('service "api" keys not translated: command, env_file');
+    expect(text).not.toContain("env_file, volumes");
     expect(text).not.toContain("command:   ");
   });
 
@@ -472,5 +473,138 @@ describe("environment from Compose", () => {
     planWrites(buildPlan(root), false);
     expect(existsSync(join(root, ".env"))).toBe(false);
     expect(existsSync(join(root, ".gitignore"))).toBe(false);
+  });
+});
+
+describe("Compose runtime keys (capabilities, ports, network_mode, volumes, restart)", () => {
+  // Shaped like a real self-hosted stack (a proxy, an app with a VPN client and a sidecar, a hardened helper, a database).
+  const compose = [
+    "services:",
+    "  caddy:",
+    "    image: caddy:2",
+    "    restart: unless-stopped",
+    "    ports: ['80:80', '443:443', '443:443/udp']",
+    "    volumes:",
+    "      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro",
+    "      - ./web:/srv/web:ro",
+    "      - caddy-data:/data",
+    "  app:",
+    "    image: example/app:1",
+    "    cap_add: [NET_ADMIN]",
+    "    init: true",
+    "    volumes: ['app-data:/data']",
+    "    ports: ['3010:3010', '9100']",
+    "  helper:",
+    "    image: example/helper:1",
+    "    network_mode: 'service:app'",
+    "  companion:",
+    "    image: example/companion:1",
+    "    shm_size: 256mb",
+    "    user: '10001:10001'",
+    "    cap_drop: [ALL]",
+    "    read_only: true",
+    "    security_opt: ['no-new-privileges:true']",
+    "    volumes: ['companion-cache:/var/tmp/cache:rw']",
+    "  db:",
+    "    image: postgres:14",
+    "    volumes: ['postgres-data:/var/lib/postgresql/data']",
+  ].join("\n");
+
+  const plan = () => {
+    tree({ "docker-compose.yml": compose, "deploy/Caddyfile": "", "web/index.html": "" });
+    const p = buildPlan(root);
+    const writes = planWrites(p, false);
+    const manifest = (name: string) =>
+      writes.items.find((i) => i.service.name === name)?.manifest as Record<string, unknown>;
+    return { manifest, text: formatPlan(p, writes) };
+  };
+
+  it("carries every runtime key over, with nothing left untranslated", () => {
+    const { text } = plan();
+    expect(text).not.toContain("keys not translated");
+    expect(text).not.toContain("is not translated");
+  });
+
+  it("publishes a proxy's 80 and 443 as extraPorts and keeps its restart policy", () => {
+    const { manifest, text } = plan();
+    expect(manifest("caddy")).toMatchObject({
+      restart: "unless-stopped",
+      exposeViaProxy: false,
+      extraPorts: [{ port: 80 }, { port: 443 }, { port: 443, protocol: "udp" }],
+    });
+    expect(text).toContain("published on 127.0.0.1 only: 80->80/tcp, 443->443/tcp, 443->443/udp");
+  });
+
+  it("rewrites bind mounts relative to the service directory and keeps named volumes", () => {
+    const { manifest } = plan();
+    expect(manifest("caddy").volumes).toEqual([
+      { source: "../../../deploy/Caddyfile", target: "/etc/caddy/Caddyfile", readOnly: true },
+      { source: "../../../web", target: "/srv/web", readOnly: true },
+      { source: "caddy-data", target: "/data" },
+    ]);
+    expect(manifest("db").volumes).toEqual([
+      { source: "postgres-data", target: "/var/lib/postgresql/data" },
+    ]);
+  });
+
+  it("routes the app's HTTP port and publishes its second listener", () => {
+    const { manifest } = plan();
+    expect(manifest("app")).toMatchObject({
+      port: 3010,
+      container: { capAdd: ["NET_ADMIN"], init: true },
+      extraPorts: [{ port: 9100 }],
+      volumes: [{ source: "app-data", target: "/data" }],
+    });
+  });
+
+  it("makes a network_mode service a sidecar of its host", () => {
+    const { manifest } = plan();
+    expect(manifest("helper").sidecarOf).toBe("app");
+    expect(manifest("helper")).not.toHaveProperty("extraPorts");
+  });
+
+  it("keeps a hardened helper's container options", () => {
+    const { manifest } = plan();
+    expect(manifest("companion").container).toEqual({
+      capDrop: ["ALL"],
+      readOnly: true,
+      user: "10001:10001",
+      securityOpt: ["no-new-privileges:true"],
+      shmSize: "256mb",
+    });
+  });
+
+  it("names a value it cannot carry over instead of dropping the whole key silently", () => {
+    tree({
+      "docker-compose.yml": [
+        "services:",
+        "  api:",
+        "    image: example/api:1",
+        "    network_mode: host",
+        "    cap_add: [NET_ADMIN, 'bad cap']",
+        "    restart: sometimes",
+        "    volumes: ['/var/run/docker.sock:/var/run/docker.sock', '/scratch', '../outside:/x', './ok:/ok']",
+        "  side:",
+        "    image: example/side:1",
+        "    network_mode: 'service:missing'",
+      ].join("\n"),
+    });
+    const p = buildPlan(root);
+    const writes = planWrites(p, false);
+    const text = formatPlan(p, writes);
+    const api = writes.items.find((i) => i.service.name === "api")?.manifest as Record<
+      string,
+      unknown
+    >;
+    expect(text).toContain('network_mode "host" is not translated');
+    expect(text).toContain('cap_add ["NET_ADMIN","bad cap"] has values Flisk does not accept');
+    expect(text).toContain('restart "sometimes" is not a policy Flisk accepts');
+    expect(text).toContain('volume "/var/run/docker.sock:/var/run/docker.sock" is not translated');
+    expect(text).toContain('volume "/scratch" is not translated');
+    expect(text).toContain('volume "../outside:/x" is not translated');
+    expect(text).toContain('network_mode not written: "missing" is not in this import');
+    expect(api.container).toEqual({ capAdd: ["NET_ADMIN"] });
+    expect(api.volumes).toEqual([{ source: "../../../ok", target: "/ok" }]);
+    expect(api).not.toHaveProperty("restart");
   });
 });

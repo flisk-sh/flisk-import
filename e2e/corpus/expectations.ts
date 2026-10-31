@@ -51,10 +51,19 @@ export const EXPECTATIONS: Record<string, Expectation> = {
   },
   "wordpress-mysql": {
     services: {
-      wordpress: svc({ match: { port: 80, dependsOn: ["db"] } }, routed),
+      wordpress: svc(
+        {
+          match: {
+            port: 80,
+            dependsOn: ["db"],
+            volumes: [{ source: "wp", target: "/var/www/html" }],
+          },
+        },
+        routed,
+      ),
       db: svc({ match: { image: "mysql:8", port: 3306 } }, privateSvc),
     },
-    plan: ["keys not translated: volumes"],
+    plan: ["wordpress  (service)"],
   },
   "gitea-postgres": {
     services: {

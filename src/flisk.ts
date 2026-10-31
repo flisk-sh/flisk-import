@@ -10,7 +10,7 @@ export const SERVICE_MANIFEST_SCHEMA_URL = "https://flisk.sh/schema.service.json
  * release after 1.4.10 (flisk#2646) accepts a bring-your-own port outside 4000-5999 and two-letter
  * names, which this importer now writes. Stated, not checked: it does not read the installed version.
  */
-export const MIN_CORE_VERSION = "1.4.11";
+export const MIN_CORE_VERSION = "1.4.24";
 /**
  * The core change that runs a registered Tiltfile (`orchestration.source: "tiltfile"`) from `flisk up`. Stated, not
  * checked, like MIN_CORE_VERSION.
