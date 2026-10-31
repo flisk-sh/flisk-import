@@ -33,6 +33,7 @@ export interface MergedService {
   envKeys: string[];
   /** Literal values for envKeys, from the highest-precedence source that states one. */
   env: Record<string, string>;
+  envRefs: Record<string, string>;
   dependsOn: string[];
   container?: ContainerOptions;
   extraPorts?: ExtraPort[];
@@ -124,6 +125,7 @@ function mergeGroup(
     kind: (ordered[0] as Candidate).kind,
     envKeys: [...new Set(ordered.flatMap((c) => c.envKeys ?? []))].sort(),
     env: Object.assign({}, ...[...ordered].reverse().map((c) => c.env ?? {})),
+    envRefs: Object.assign({}, ...[...ordered].reverse().map((c) => c.envRefs ?? {})),
     dependsOn: [...new Set(ordered.flatMap((c) => (c.dependsOn ?? []).map(resolve)))].sort(),
     exposeViaProxy: ordered.find((c) => c.exposeViaProxy !== undefined)?.exposeViaProxy,
     // Only Compose states these, so the first source that has one wins.

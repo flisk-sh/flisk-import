@@ -38,6 +38,8 @@ export interface Candidate {
    * service.json; a value that uses Compose interpolation (`${VAR}`) is left out.
    */
   env?: Record<string, string>;
+  /** Values that are only Compose interpolation (`${VAR}`, `${VAR:-default}`), kept as written for service.json `env`. */
+  envRefs?: Record<string, string>;
   dependsOn?: string[];
   /** Compose container options (cap_add, read_only, ...) as service.json `container` (Flisk 1.5, flisk#2907). */
   container?: ContainerOptions;

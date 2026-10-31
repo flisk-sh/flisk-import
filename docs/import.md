@@ -21,7 +21,7 @@ Each Compose service becomes `services/<stack>/<service>/service.json`, where th
 | HTTP URL in `healthcheck.test` | `healthCheckPath`. Without one, `/` is assumed and the plan says so. |
 | HTTP URL, `host:port/path` or `localhost/path` in `healthcheck.test` | `healthCheckPath`. When no path can be read, `/` is assumed and the plan says so. |
 | `depends_on` | `dependsOn`, limited to services in this import |
-| `environment` | names in `secrets.required`; literal values appended to the project `.env` (added to `.gitignore`). Keys already in `.env` are kept; `${VAR}` values and names Flisk rejects (lowercase) are listed in the plan instead. |
+| `environment` | Values that cannot be secrets in `env`: numbers, `true`/`false`, the address of another imported service with no user, password, query or fragment, and pure `${VAR}` / `${VAR:-default}` references (the plan names the variables they need in `.env`). Every other name, and any name with `PASS`, `SECRET`, `TOKEN`, `KEY`, `AUTH`, `HMAC`, `SESSION` and the like, in `secrets.required`, with literal values appended to the project `.env` (added to `.gitignore`). Keys already in `.env` are kept; names Flisk rejects (lowercase) are listed in the plan. |
 
 Every imported service is `appType: "bring-your-own"`. A service whose port is 22, 25, 1883, 2181, 3306, 5432, 5672, 6379, 9092, 9200, 11211 or 27017, or that publishes no single port, is private: `exposeViaProxy: false`, no Traefik route, no health path. Any other single port, including 8000 and 8080, gets a Traefik route.
 

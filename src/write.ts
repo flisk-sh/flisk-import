@@ -37,6 +37,32 @@ export interface WritePlan {
 
 /** Secret names the service schema accepts (`secrets.required`). */
 const ENV_NAME = /^[A-Z_][A-Z0-9_]*$/;
+/** Names that may hold a credential whatever their value looks like; these always stay secrets. */
+const CREDENTIAL_NAME =
+  /PASS|SECRET|TOKEN|KEY|PRIVATE|CREDENTIAL|AUTH|HMAC|SALT|CERT|SESSION|COOKIE/i;
+
+/**
+ * Whether a literal Compose value cannot be a secret, so it may be committed in service.json `env`: a number, true or false,
+ * or the address of another service in this import (a URL or host:port with no user, password, query or fragment).
+ */
+function isPlainValue(value: string, serviceHosts: Set<string>): boolean {
+  if (/^-?\d+(\.\d+)?$/.test(value) || /^(true|false)$/i.test(value)) return true;
+  const hostPort = value.match(/^([a-z0-9][a-z0-9._-]*):(\d{1,5})$/);
+  if (hostPort) return serviceHosts.has(hostPort[1] as string);
+  try {
+    const url = new URL(value);
+    return (
+      serviceHosts.has(url.hostname) &&
+      !url.username &&
+      !url.password &&
+      !url.search &&
+      !url.hash &&
+      /^[A-Za-z0-9._~/-]*$/.test(url.pathname)
+    );
+  } catch {
+    return false;
+  }
+}
 
 function readEnvKeys(path: string): Set<string> {
   if (!existsSync(path)) return new Set();
@@ -119,6 +145,10 @@ export function planWrites(plan: ImportPlan, force: boolean): WritePlan {
     return !reason;
   });
   const names = new Set(accepted.map((s) => s.name));
+  // Hostnames other services use for these: the resource name, which stays the container hostname, and the Compose name.
+  const serviceHosts = new Set(
+    plan.services.flatMap((s) => (s.originalName ? [s.name, s.originalName] : [s.name])),
+  );
 
   for (const service of accepted) {
     const path = resolve(servicesDir, stack, service.name, "service.json");
@@ -179,8 +209,29 @@ export function planWrites(plan: ImportPlan, force: boolean): WritePlan {
       notes.push(
         "health path / is assumed: no HTTP health path could be read from Compose. Traefik routes only while it answers 2xx or 3xx",
       );
-    // Names go into service.json as secrets, so Flisk injects them; values go to the gitignored project .env.
-    const secretNames = service.envKeys.filter((key) => ENV_NAME.test(key));
+    // Values that cannot be secrets (numbers, booleans, another service's address, pure ${VAR} references) go into the
+    // committed service.json `env` (Flisk 1.4.24). Every other name is a secret: Flisk injects it from the gitignored .env.
+    const validNames = service.envKeys.filter((key) => ENV_NAME.test(key));
+    const env: Record<string, string> = {};
+    for (const key of validNames) {
+      if (CREDENTIAL_NAME.test(key)) continue;
+      const literal = service.env[key];
+      const reference = service.envRefs[key];
+      if (literal !== undefined && isPlainValue(literal, serviceHosts)) env[key] = literal;
+      else if (literal === undefined && reference !== undefined) env[key] = reference;
+    }
+    const referenced = [
+      ...new Set(
+        Object.values(env).flatMap((value) =>
+          [...value.matchAll(/\$\{([A-Za-z_][A-Za-z0-9_]*)(:?-)?/g)]
+            .filter((m) => !m[2])
+            .map((m) => m[1] as string),
+        ),
+      ),
+    ].filter((name) => !envKept.has(name) && !(name in envAdd));
+    if (referenced.length)
+      notes.push(`env reads ${referenced.join(", ")} from the project .env; add them there`);
+    const secretNames = validNames.filter((key) => !(key in env));
     const skippedNames = service.envKeys.filter((key) => !ENV_NAME.test(key));
     if (skippedNames.length)
       notes.push(
@@ -253,6 +304,9 @@ export function planWrites(plan: ImportPlan, force: boolean): WritePlan {
       ...source,
       ...(isPrivate ? { exposeViaProxy: false } : {}),
       ...(dependsOn.length ? { dependsOn } : {}),
+      ...(Object.keys(env).length
+        ? { env: Object.fromEntries(Object.entries(env).sort(([a], [b]) => a.localeCompare(b))) }
+        : {}),
       ...(secretNames.length ? { secrets: { required: secretNames } } : {}),
       ...(service.restart ? { restart: service.restart } : {}),
       ...(service.container ? { container: service.container } : {}),
