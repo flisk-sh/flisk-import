@@ -608,3 +608,65 @@ describe("Compose runtime keys (capabilities, ports, network_mode, volumes, rest
     expect(api).not.toHaveProperty("restart");
   });
 });
+
+describe("environment values that cannot be secrets go into service.json env", () => {
+  const compose = [
+    "services:",
+    "  app:",
+    "    image: example/app:1",
+    "    ports: ['3010:3010']",
+    "    environment:",
+    "      HT_INVIDIOUS: http://invidious:3000",
+    "      PROXY: socks5://tubehaus-vpn:1080",
+    "      CACHE: redis:6379",
+    "      RETRIES: 3",
+    "      ENABLED: 'true'",
+    "      PUBLIC_URL: ${APP_URL}",
+    "      PORT_HINT: ${APP_PORT:-8080}",
+    "      DB_URL: postgres://user:hunter2@invidious-db/app",
+    "      API_KEY: 12345",
+    "      EXTERNAL: https://example.com/",
+    "      MODE: production",
+    "      SESSION_TTL: ${SESSION_TTL}",
+    "  invidious:",
+    "    image: example/invidious:1",
+    "  invidious-db:",
+    "    image: postgres:16",
+    "  tubehaus-vpn:",
+    "    image: example/vpn:1",
+    "  redis:",
+    "    image: redis:7",
+  ].join("\n");
+
+  it("commits numbers, booleans, service addresses and ${VAR} references, and keeps the rest secret", () => {
+    tree({ "docker-compose.yml": compose });
+    const writes = planWrites(buildPlan(root), false);
+    applyWrites(writes);
+    const app = JSON.parse(readFileSync(serviceJson("app"), "utf8"));
+    expect(app.env).toEqual({
+      CACHE: "redis:6379",
+      ENABLED: "true",
+      HT_INVIDIOUS: "http://invidious:3000",
+      PORT_HINT: "${APP_PORT:-8080}",
+      PROXY: "socks5://tubehaus-vpn:1080",
+      PUBLIC_URL: "${APP_URL}",
+      RETRIES: "3",
+    });
+    // A credential name, a URL with a password, an outside address and a free-form string stay out of service.json.
+    expect(app.secrets).toEqual({
+      required: ["API_KEY", "DB_URL", "EXTERNAL", "MODE", "SESSION_TTL"],
+    });
+    expect(readFileSync(serviceJson("app"), "utf8")).not.toContain("hunter2");
+    const env = readFileSync(join(root, ".env"), "utf8");
+    expect(env).toContain("DB_URL=postgres://user:hunter2@invidious-db/app\n");
+    expect(env).not.toContain("HT_INVIDIOUS=");
+  });
+
+  it("names the variables a committed ${VAR} reference needs, but not one with a default", () => {
+    tree({ "docker-compose.yml": compose });
+    const writes = planWrites(buildPlan(root), false);
+    const notes = writes.items.find((i) => i.service.name === "app")?.notes.join("\n");
+    expect(notes).toContain("env reads APP_URL from the project .env; add them there");
+    expect(notes).not.toContain("APP_PORT");
+  });
+});
