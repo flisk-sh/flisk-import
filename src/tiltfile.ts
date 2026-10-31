@@ -1,7 +1,14 @@
-import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
-import { dirname, join, relative, resolve } from "node:path";
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  realpathSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { ImportError } from "./errors.js";
-import { defaultProjectConfig, findProjectRoot } from "./flisk.js";
+import { defaultProjectConfig, findProjectRoot, missingProjectFields } from "./flisk.js";
 
 /** What `flisk-import tiltfile` writes into `.flisk/project.json`. */
 export interface TiltfileOrchestration {
@@ -26,6 +33,31 @@ export interface TiltfilePlan {
 }
 
 const RERUN = "flisk import tiltfile <path>";
+const RECREATE =
+  "Or recreate it with `flisk project --yes --force` (this resets .flisk/project.json), then run the import again";
+
+/** The refusal for a Tiltfile inside `.flisk/`; `resolved` names where a symlink leads. */
+function insideFliskError(path: string, resolved?: string): ImportError {
+  const via = resolved ? ` (it resolves to ${resolved})` : "";
+  return new ImportError(
+    `${path} is inside .flisk/${via}, where Flisk writes its generated files; import your own Tiltfile instead`,
+    [`Point it at the Tiltfile you maintain: ${RERUN}`],
+  );
+}
+
+/**
+ * Where `tiltfile` really is, relative to the real `<projectRoot>/.flisk`, when a symlink on the way leads into it.
+ * The lexical check misses `infra/Tiltfile -> ../.flisk/.flisk-out/Tiltfile`, and flisk up would then include its own
+ * generated Tiltfile. Undefined when it does not, or when there is no `.flisk/` yet.
+ */
+function linkedIntoFlisk(tiltfile: string, projectRoot: string): string | undefined {
+  const fliskDir = join(projectRoot, ".flisk");
+  if (!existsSync(fliskDir)) return undefined;
+  const realFlisk = realpathSync(fliskDir);
+  const inside = relative(realFlisk, realpathSync(tiltfile));
+  if (inside === ".." || inside.startsWith(`..${sep}`) || isAbsolute(inside)) return undefined;
+  return [".flisk", ...inside.split(sep)].join("/");
+}
 
 /** Describes an `orchestration` value for a message, for example `tiltfile: Tiltfile`. */
 export function describeOrchestration(value: unknown): string {
@@ -67,17 +99,14 @@ export function planTiltfileImport(
       ["Rename the file or folder, then run: flisk import tiltfile <path>"],
     );
   }
-  if (path === ".flisk" || path.startsWith(".flisk/")) {
-    throw new ImportError(
-      `${path} is inside .flisk/, where Flisk writes its generated files; import your own Tiltfile instead`,
-      [`Point it at the Tiltfile you maintain: ${RERUN}`],
-    );
-  }
+  if (path === ".flisk" || path.startsWith(".flisk/")) throw insideFliskError(path);
   if (!statSync(tiltfile, { throwIfNoEntry: false })?.isFile()) {
     throw new ImportError(`No Tiltfile found at ${pathArg}`, [
       `Pass the path of an existing Tiltfile, or a folder that holds one: ${RERUN}`,
     ]);
   }
+  const resolved = linkedIntoFlisk(tiltfile, projectRoot);
+  if (resolved) throw insideFliskError(path, resolved);
 
   const projectJson = join(projectRoot, ".flisk", "project.json");
   const orchestration: TiltfileOrchestration = { source: "tiltfile", path };
@@ -105,15 +134,27 @@ export function planTiltfileImport(
   } catch (err) {
     throw new ImportError(
       `Cannot read ${projectJson}: ${err instanceof Error ? err.message : String(err)}`,
-      ["Fix the JSON in .flisk/project.json, then run the import again"],
+      ["Fix the JSON in .flisk/project.json, then run the import again", RECREATE],
     );
   }
   if (!existing || typeof existing !== "object" || Array.isArray(existing)) {
     throw new ImportError(`${projectJson} is not a JSON object`, [
       "Fix .flisk/project.json, then run the import again",
+      RECREATE,
     ]);
   }
   const config = existing as Record<string, unknown>;
+  // Writing orchestration into a file flisk up cannot read would report success and then fail at flisk up.
+  const missing = missingProjectFields(config);
+  if (missing.length) {
+    throw new ImportError(
+      `.flisk/project.json is missing fields flisk up needs, or has them with the wrong type: ${missing.join(", ")}`,
+      [
+        `Add ${missing.length === 1 ? "it" : "them"} to .flisk/project.json, then run the import again`,
+        RECREATE,
+      ],
+    );
+  }
   const replaced = config.orchestration;
   if (replaced !== undefined && !options.force) {
     throw new ImportError(
