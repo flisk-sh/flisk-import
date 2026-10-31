@@ -7,6 +7,7 @@ import {
   readFileSync,
   rmSync,
   statSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -23,6 +24,23 @@ function run(args: string[], input?: string, cwd = repo) {
 }
 const projectJsonPath = () => join(repo, ".flisk", "project.json");
 const projectJson = () => JSON.parse(readFileSync(projectJsonPath(), "utf8"));
+/** The smallest `.flisk/project.json` Flisk core reads, with `extra` keys on top. */
+const validConfig = (extra: Record<string, unknown> = {}) => ({
+  version: "1.0",
+  project: { name: "mine", version: "1.0.0" },
+  phases: Object.fromEntries(
+    ["pre_alpha", "alpha", "beta", "out_of_scope"].map((p) => [p, { name: p, enabledStacks: [] }]),
+  ),
+  optional_infra: {
+    monitoring: false,
+    elk: false,
+    debezium: false,
+    golden_image: false,
+    verdaccio: false,
+  },
+  discovery: { paths: ["services/*/*"] },
+  ...extra,
+});
 
 beforeEach(() => {
   repo = join(mkdtempSync(join(tmpdir(), "flisk-import-tiltfile-e2e-")), "shop");
@@ -45,11 +63,12 @@ describe("flisk-import tiltfile (built CLI)", () => {
 
   it("--dry-run leaves an existing project.json byte for byte", () => {
     mkdirSync(join(repo, ".flisk"));
-    writeFileSync(projectJsonPath(), '{"version":"1.0"}');
+    const content = JSON.stringify(validConfig());
+    writeFileSync(projectJsonPath(), content);
     const r = run(["tiltfile", "--dry-run"]);
     expect(r.code).toBe(0);
     expect(r.out).toContain("[update, other keys kept]");
-    expect(readFileSync(projectJsonPath(), "utf8")).toBe('{"version":"1.0"}');
+    expect(readFileSync(projectJsonPath(), "utf8")).toBe(content);
   });
 
   it("--yes creates .flisk/project.json with the orchestration source and leaves the Tiltfile alone", () => {
@@ -73,17 +92,18 @@ describe("flisk-import tiltfile (built CLI)", () => {
 
   it("takes a directory or a file path, resolved from the cwd and written relative to the project root", () => {
     mkdirSync(join(repo, ".flisk"));
-    writeFileSync(projectJsonPath(), `${JSON.stringify({ version: "1.0", keep: { me: 1 } })}\n`);
+    writeFileSync(projectJsonPath(), `${JSON.stringify(validConfig({ keep: { me: 1 } }))}\n`);
     mkdirSync(join(repo, "dev", "local"), { recursive: true });
     writeFileSync(join(repo, "dev", "local", "Tiltfile"), TILTFILE);
 
     const fromDir = run(["tiltfile", "local", "--yes"], undefined, join(repo, "dev"));
     expect(fromDir.code).toBe(0);
-    expect(projectJson()).toEqual({
-      version: "1.0",
-      keep: { me: 1 },
-      orchestration: { source: "tiltfile", path: "dev/local/Tiltfile" },
-    });
+    expect(projectJson()).toEqual(
+      validConfig({
+        keep: { me: 1 },
+        orchestration: { source: "tiltfile", path: "dev/local/Tiltfile" },
+      }),
+    );
 
     const fromFile = run(["tiltfile", "dev/local/Tiltfile", "--yes", "--force"]);
     expect(fromFile.code).toBe(0);
@@ -112,6 +132,51 @@ describe("flisk-import tiltfile (built CLI)", () => {
     expect(existsSync(projectJsonPath())).toBe(false);
   });
 
+  it("refuses a Tiltfile that is a symlink into .flisk/ with exit 1 and a hint", () => {
+    mkdirSync(join(repo, ".flisk", ".flisk-out"), { recursive: true });
+    writeFileSync(join(repo, ".flisk", ".flisk-out", "Tiltfile"), "# generated\n");
+    mkdirSync(join(repo, "infra"));
+    symlinkSync(join("..", ".flisk", ".flisk-out", "Tiltfile"), join(repo, "infra", "Tiltfile"));
+    const r = run(["tiltfile", "infra/Tiltfile", "--yes"]);
+    expect(r.code).toBe(1);
+    expect(r.err).toContain(
+      "Error: infra/Tiltfile is inside .flisk/ (it resolves to .flisk/.flisk-out/Tiltfile)",
+    );
+    expect(r.err).toContain("  -> Point it at the Tiltfile you maintain");
+    expect(existsSync(projectJsonPath())).toBe(false);
+  });
+
+  it("refuses a project.json without the fields flisk up needs, with exit 1, and leaves it as it was", () => {
+    mkdirSync(join(repo, ".flisk"));
+    writeFileSync(projectJsonPath(), '{"version":"1.0","project":{"name":"mine"}}');
+    const r = run(["tiltfile", "--yes"]);
+    expect(r.code).toBe(1);
+    expect(r.err).toContain(
+      "Error: .flisk/project.json is missing fields flisk up needs, or has them with the wrong type: project.version, phases, optional_infra, discovery",
+    );
+    expect(r.err).toContain("  -> Add them to .flisk/project.json");
+    expect(r.err).toContain("  -> Or recreate it with `flisk project --yes --force`");
+    expect(r.out).not.toContain("wrote");
+    expect(readFileSync(projectJsonPath(), "utf8")).toBe(
+      '{"version":"1.0","project":{"name":"mine"}}',
+    );
+  });
+
+  it("refuses a project.json that is not JSON, or not an object, with exit 1 and a hint", () => {
+    mkdirSync(join(repo, ".flisk"));
+    for (const [content, reason] of [
+      ["{ not json", "Cannot read"],
+      ["[1, 2]", "is not a JSON object"],
+    ]) {
+      writeFileSync(projectJsonPath(), content);
+      const r = run(["tiltfile", "--yes"]);
+      expect(r.code).toBe(1);
+      expect(r.err).toContain(reason);
+      expect(r.err).toContain("  -> ");
+      expect(readFileSync(projectJsonPath(), "utf8")).toBe(content);
+    }
+  });
+
   it("refuses a path with a quote or a control character with exit 1", () => {
     for (const name of ['we"ird', "new\nline"]) {
       mkdirSync(join(repo, name));
@@ -124,12 +189,10 @@ describe("flisk-import tiltfile (built CLI)", () => {
   });
 
   it("refuses an orchestration already set unless --force, which keeps every other key", () => {
-    const existing = {
-      version: "1.0",
-      project: { name: "mine", version: "1.0.0" },
+    const existing = validConfig({
       orchestration: { source: "tiltfile", path: "old/Tiltfile" },
       overrides: { api: { port: 4100 } },
-    };
+    });
     mkdirSync(join(repo, ".flisk"));
     writeFileSync(projectJsonPath(), JSON.stringify(existing));
 

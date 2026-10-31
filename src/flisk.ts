@@ -80,3 +80,57 @@ export function defaultProjectConfig(
     overrides: {},
   };
 }
+
+const isObject = (value: unknown): value is Record<string, unknown> =>
+  !!value && typeof value === "object" && !Array.isArray(value);
+
+const PHASES = ["pre_alpha", "alpha", "beta", "out_of_scope"] as const;
+const OPTIONAL_INFRA = ["monitoring", "elk", "debezium", "golden_image", "verdaccio"] as const;
+
+/**
+ * The fields of an existing `.flisk/project.json` that Flisk core would refuse, missing or of the wrong type, as dotted
+ * names such as `project.name`. A whole object that is absent is named once (`optional_infra`), not field by field.
+ * Empty when `flisk up` can read the file. A copy of core's `normalizeProjectConfig` (flisk
+ * `cli/src/generator/template-engine.ts`), so it can drift from flisk.
+ */
+export function missingProjectFields(config: Record<string, unknown>): string[] {
+  const missing: string[] = [];
+  if (typeof config.version !== "string") missing.push("version");
+
+  if (!isObject(config.project)) missing.push("project");
+  else
+    for (const key of ["name", "version"])
+      if (typeof config.project[key] !== "string") missing.push(`project.${key}`);
+
+  // Core also reads the older `stacks` shape, with `services` in place of `enabledStacks`.
+  const phaseGaps = (value: unknown, label: string, field: string): string[] => {
+    if (!isObject(value)) return [label];
+    return PHASES.filter((phase) => {
+      const entry = value[phase];
+      return !isObject(entry) || !Array.isArray(entry[field]);
+    }).map((phase) => `${label}.${phase}.${field}`);
+  };
+  const phases = phaseGaps(config.phases, "phases", "enabledStacks");
+  if (phases.length && phaseGaps(config.stacks, "stacks", "services").length)
+    missing.push(...phases);
+
+  if (!isObject(config.optional_infra)) missing.push("optional_infra");
+  else {
+    const infra = config.optional_infra;
+    for (const key of OPTIONAL_INFRA)
+      if (typeof infra[key] !== "boolean") missing.push(`optional_infra.${key}`);
+  }
+
+  if (!isObject(config.discovery)) missing.push("discovery");
+  else if (!Array.isArray(config.discovery.paths)) missing.push("discovery.paths");
+
+  if (
+    config.capabilities !== undefined &&
+    !(
+      isObject(config.capabilities) &&
+      Object.values(config.capabilities).every((flag) => typeof flag === "boolean")
+    )
+  )
+    missing.push("capabilities");
+  return missing;
+}

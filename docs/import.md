@@ -72,13 +72,14 @@ The key is added to the existing `.flisk/project.json`, and every other key is k
 
 ### What it refuses
 
-Each of these exits 1 with the reason and writes nothing:
+Each of these exits 1 with the reason and at least one `->` hint, and writes nothing:
 
 - **No Tiltfile** at the path, or a folder without one.
-- **A path inside `.flisk/`**, such as `.flisk/.flisk-out/Tiltfile`: that is where Flisk writes its generated Tiltfile, which includes yours.
+- **A path inside `.flisk/`**, such as `.flisk/.flisk-out/Tiltfile`: that is where Flisk writes its generated Tiltfile, which includes yours. A symlink that leads there, such as `infra/Tiltfile` pointing at `.flisk/.flisk-out/Tiltfile`, is refused too: the real path is compared with the real `.flisk/` folder.
 - **A quote or control character** in the path. `flisk up` puts the path in its generated Tiltfile as a string, so rename the file or folder first.
 - **An `orchestration` already set** in `.flisk/project.json`, whatever its value. Pass `--force` to replace it.
 - **A `.flisk/project.json` that is not valid JSON**, or not a JSON object.
+- **A `.flisk/project.json` without the fields `flisk up` needs**: `version`, `project.name` and `project.version`, `phases` (each of `pre_alpha`, `alpha`, `beta` and `out_of_scope` with an `enabledStacks` list), the five `optional_infra` flags, and `discovery.paths`. The error names each one that is missing or has the wrong type. Add them, or recreate the file with `flisk project --yes --force`, which resets it. Writing `orchestration` into such a file would report success and then fail at `flisk up`.
 
 ### Exit codes
 

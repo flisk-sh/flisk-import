@@ -1,8 +1,17 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { ImportError } from "../errors.js";
+import { defaultProjectConfig, missingProjectFields } from "../flisk.js";
 import { buildPlan } from "../plan.js";
 import {
   applyTiltfileImport,
@@ -21,6 +30,13 @@ function tree(files: Record<string, string>): void {
     writeFileSync(abs, content);
   }
 }
+
+/** A `.flisk/project.json` that Flisk core reads, with `extra` keys on top. */
+const valid = (extra: Record<string, unknown> = {}) => ({
+  ...defaultProjectConfig("mine", { description: "", enabledStacks: [] }),
+  ...extra,
+});
+const validJson = (extra: Record<string, unknown> = {}) => JSON.stringify(valid(extra));
 
 const projectJson = () => JSON.parse(readFileSync(join(root, ".flisk", "project.json"), "utf8"));
 
@@ -86,7 +102,7 @@ describe("planTiltfileImport", () => {
   });
 
   it("uses the nearest folder with .flisk/project.json as the root, and the path stays relative to it", () => {
-    tree({ ".flisk/project.json": '{"version":"1.0"}\n', "apps/web/Tiltfile": "print('hi')\n" });
+    tree({ ".flisk/project.json": validJson(), "apps/web/Tiltfile": "print('hi')\n" });
     const plan = planTiltfileImport("Tiltfile", { cwd: join(root, "apps", "web") });
     expect(plan.projectRoot).toBe(root);
     expect(plan.action).toBe("update");
@@ -135,12 +151,11 @@ describe("planTiltfileImport", () => {
   });
 
   it("refuses an orchestration already set, and --force replaces it in place keeping every other key", () => {
-    const existing = {
-      version: "1.0",
+    const existing = valid({
       project: { name: "mine", version: "2.0.0" },
       orchestration: { source: "tiltfile", path: "old/Tiltfile" },
       custom: { kept: true },
-    };
+    });
     tree({ Tiltfile: "print('hi')\n", ".flisk/project.json": JSON.stringify(existing) });
     const err = refusal(() => planTiltfileImport(undefined, { cwd: root }));
     expect(err.message).toBe(
@@ -156,21 +171,133 @@ describe("planTiltfileImport", () => {
   });
 
   it("refuses any orchestration value, not only a Tiltfile one", () => {
-    tree({ Tiltfile: "x\n", ".flisk/project.json": '{"orchestration":{"source":"generated"}}' });
+    tree({
+      Tiltfile: "x\n",
+      ".flisk/project.json": validJson({ orchestration: { source: "generated" } }),
+    });
     expect(refusal(() => planTiltfileImport(undefined, { cwd: root })).message).toContain(
       "(generated: default)",
     );
   });
 
-  it("refuses a project.json that is not a JSON object", () => {
+  it("refuses a project.json that is not a JSON object, with a hint", () => {
     tree({ Tiltfile: "x\n", ".flisk/project.json": "{ not json" });
-    expect(refusal(() => planTiltfileImport(undefined, { cwd: root })).message).toContain(
-      "Cannot read",
+    const notJson = refusal(() => planTiltfileImport(undefined, { cwd: root }));
+    expect(notJson.message).toContain("Cannot read");
+    expect(notJson.suggestions.join(" ")).toContain("flisk project --yes --force");
+    for (const content of ["[]\n", '"text"\n', "null\n", "42\n"]) {
+      writeFileSync(join(root, ".flisk", "project.json"), content);
+      const err = refusal(() => planTiltfileImport(undefined, { cwd: root }));
+      expect(err.message).toContain("is not a JSON object");
+      expect(err.suggestions.length).toBeGreaterThan(0);
+    }
+  });
+
+  it("refuses a project.json without the fields flisk up needs, naming them, before any write", () => {
+    tree({ Tiltfile: "x\n", ".flisk/project.json": '{"version":"1.0"}\n' });
+    const err = refusal(() => planTiltfileImport(undefined, { cwd: root }));
+    expect(err.message).toBe(
+      ".flisk/project.json is missing fields flisk up needs, or has them with the wrong type: project, phases, optional_infra, discovery",
     );
-    writeFileSync(join(root, ".flisk", "project.json"), "[]\n");
-    expect(refusal(() => planTiltfileImport(undefined, { cwd: root })).message).toContain(
-      "is not a JSON object",
+    expect(err.suggestions).toHaveLength(2);
+    expect(err.suggestions[0]).toContain("Add them to .flisk/project.json");
+    expect(err.suggestions[1]).toContain("flisk project --yes --force");
+    expect(readFileSync(join(root, ".flisk", "project.json"), "utf8")).toBe('{"version":"1.0"}\n');
+
+    // --force replaces orchestration only; it does not skip the check.
+    writeFileSync(
+      join(root, ".flisk", "project.json"),
+      JSON.stringify({ ...valid({ orchestration: { source: "generated" } }), discovery: {} }),
     );
+    expect(
+      refusal(() => planTiltfileImport(undefined, { cwd: root, force: true })).message,
+    ).toMatch(/: discovery\.paths$/);
+  });
+
+  it("refuses a Tiltfile that is a symlink into .flisk/", () => {
+    tree({ ".flisk/.flisk-out/Tiltfile": "# generated\n", "infra/.keep": "" });
+    symlinkSync(join("..", ".flisk", ".flisk-out", "Tiltfile"), join(root, "infra", "Tiltfile"));
+    const err = refusal(() => planTiltfileImport("infra/Tiltfile", { cwd: root }));
+    expect(err.message).toBe(
+      "infra/Tiltfile is inside .flisk/ (it resolves to .flisk/.flisk-out/Tiltfile), where Flisk writes its generated files; import your own Tiltfile instead",
+    );
+    expect(err.suggestions).toEqual([
+      "Point it at the Tiltfile you maintain: flisk import tiltfile <path>",
+    ]);
+    expect(refusal(() => planTiltfileImport("infra", { cwd: root })).message).toContain(
+      "is inside .flisk/",
+    );
+  });
+
+  it("refuses a folder symlinked into .flisk/, and a Tiltfile under a symlinked .flisk/", () => {
+    tree({ ".flisk/.flisk-out/Tiltfile": "# generated\n" });
+    symlinkSync(join(".flisk", ".flisk-out"), join(root, "ops"));
+    expect(refusal(() => planTiltfileImport("ops", { cwd: root })).message).toContain(
+      "ops/Tiltfile is inside .flisk/ (it resolves to .flisk/.flisk-out/Tiltfile)",
+    );
+
+    // .flisk/ itself a link: a Tiltfile reached through its target, not through .flisk/, is still inside it.
+    const state = join(dirname(root), "state");
+    mkdirSync(join(state, ".flisk-out"), { recursive: true });
+    writeFileSync(join(state, ".flisk-out", "Tiltfile"), "# generated\n");
+    rmSync(join(root, ".flisk"), { recursive: true });
+    symlinkSync(state, join(root, ".flisk"));
+    symlinkSync(join(state, ".flisk-out", "Tiltfile"), join(root, "Tiltfile"));
+    expect(refusal(() => planTiltfileImport(undefined, { cwd: root })).message).toContain(
+      "Tiltfile is inside .flisk/ (it resolves to .flisk/.flisk-out/Tiltfile)",
+    );
+  });
+
+  it("accepts a symlink to a Tiltfile outside .flisk/, and a Tiltfile when the root itself is reached through a link", () => {
+    tree({ "shared/Tiltfile": "print('hi')\n", ".flisk/project.json": validJson() });
+    symlinkSync(join("shared", "Tiltfile"), join(root, "Tiltfile"));
+    expect(planTiltfileImport(undefined, { cwd: root }).orchestration.path).toBe("Tiltfile");
+
+    const linkedRoot = join(dirname(root), "linked");
+    symlinkSync(root, linkedRoot);
+    expect(planTiltfileImport("shared", { cwd: linkedRoot }).orchestration.path).toBe(
+      "shared/Tiltfile",
+    );
+  });
+});
+
+describe("missingProjectFields", () => {
+  it("is empty for the project.json the imports create, and for core's older stacks shape", () => {
+    expect(missingProjectFields(valid())).toEqual([]);
+    const { phases: _phases, ...rest } = valid();
+    const stacks = Object.fromEntries(
+      ["pre_alpha", "alpha", "beta", "out_of_scope"].map((p) => [p, { name: p, services: [] }]),
+    );
+    expect(missingProjectFields({ ...rest, stacks })).toEqual([]);
+  });
+
+  it("names each missing or mistyped field, and a whole missing object once", () => {
+    expect(missingProjectFields({})).toEqual([
+      "version",
+      "project",
+      "phases",
+      "optional_infra",
+      "discovery",
+    ]);
+    expect(
+      missingProjectFields({
+        ...valid(),
+        version: 1,
+        project: { name: "shop" },
+        phases: { ...(valid().phases as object), beta: { enabledStacks: "x" } },
+        optional_infra: { ...(valid().optional_infra as object), elk: "false" },
+        discovery: { paths: "services/*/*" },
+        capabilities: { gateway: "false" },
+      }),
+    ).toEqual([
+      "version",
+      "project.version",
+      "phases.beta.enabledStacks",
+      "optional_infra.elk",
+      "discovery.paths",
+      "capabilities",
+    ]);
+    expect(missingProjectFields({ ...valid(), capabilities: { gateway: false } })).toEqual([]);
   });
 });
 
@@ -184,7 +311,7 @@ describe("applyTiltfileImport", () => {
   });
 
   it("adds orchestration to an existing project.json and keeps every other key", () => {
-    const existing = { version: "1.0", project: { name: "mine" }, overrides: { a: 1 }, extra: [1] };
+    const existing = valid({ overrides: { a: 1 }, extra: [1] });
     tree({ Tiltfile: "x\n", ".flisk/project.json": JSON.stringify(existing) });
     applyTiltfileImport(planTiltfileImport(undefined, { cwd: root }));
     expect(projectJson()).toEqual({
@@ -211,11 +338,13 @@ describe("formatTiltfilePlan", () => {
     expect(text).toContain(".flisk/project.json  [create Flisk project]");
     expect(text).toContain('orchestration:  {"source":"tiltfile","path":"Tiltfile"}');
 
-    tree({ ".flisk/project.json": '{"orchestration":{"source":"tiltfile","path":"old"}}' });
+    tree({
+      ".flisk/project.json": validJson({ orchestration: { source: "tiltfile", path: "old" } }),
+    });
     expect(formatTiltfilePlan(planTiltfileImport(undefined, { cwd: root, force: true }))).toContain(
       "[update, replaces orchestration (tiltfile: old) (--force)]",
     );
-    writeFileSync(join(root, ".flisk", "project.json"), "{}");
+    writeFileSync(join(root, ".flisk", "project.json"), validJson());
     expect(formatTiltfilePlan(planTiltfileImport(undefined, { cwd: root }))).toContain(
       "[update, other keys kept]",
     );

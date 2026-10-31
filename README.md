@@ -32,7 +32,7 @@ flisk import tiltfile dev/Tiltfile --yes # a named file, or a folder that holds 
 
 - **Path:** `[path]` defaults to `Tiltfile`; a folder means `<folder>/Tiltfile`. It is resolved from the current directory. The project root is the nearest folder with `.flisk/project.json`, else the current directory.
 - **Writes:** only `.flisk/project.json`, with `"orchestration": { "source": "tiltfile", "path": "<path from the project root>" }`. Every other key is kept. Without a `project.json`, it creates the same minimal one as the Compose import, with only the proxy stack. It never edits the Tiltfile.
-- **Refuses (exit 1):** a missing Tiltfile, a path inside `.flisk/`, a path with a quote or control character, and a `project.json` that already sets `orchestration` (pass `--force` to replace it).
+- **Refuses (exit 1):** a missing Tiltfile, a path inside `.flisk/` (also through a symlink), a path with a quote or control character, a `project.json` that is not a JSON object or lacks the fields `flisk up` needs, and a `project.json` that already sets `orchestration` (pass `--force` to replace it).
 - **Exit codes:** the same as the Compose import: `0` for `--dry-run` or a write, `1` for a refusal, `2` when the prompt is declined or closed (`Nothing written.`).
 - **Needs** a Flisk core that runs an imported Tiltfile ([flisk#2849](https://github.com/flisk-sh/flisk/pull/2849)). The importer does not check the core version.
 
