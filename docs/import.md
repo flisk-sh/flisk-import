@@ -1,6 +1,6 @@
 # Import a Compose project
 
-`flisk import [dir]` reads exactly one file: `<dir>/docker-compose.yml`. It prints a plan, asks before writing, and writes one `service.json` per Compose service. `--dry-run` never writes; `--yes` writes without prompting. It does not start containers.
+`flisk import [dir]` reads exactly one file: `<dir>/docker-compose.yml`. It prints a plan, asks before writing, and writes one `service.json` per Compose service. `--dry-run` never writes; `--yes` writes without prompting. It does not start containers. To register a Tiltfile the repo already has instead, see [Import a Tiltfile](#import-a-tiltfile).
 
 ```bash
 flisk import . --dry-run
@@ -43,3 +43,49 @@ The plan names each of these. Nothing below is guessed.
 3. Flisk injects its own `PORT`, `DATABASE_URL` and a `Host: <service>.<project>.localhost` header. An app that validates its host or reads `DATABASE_URL` may need configuration that Compose did not.
 
 The command exits 1 when nothing could be imported (an unreadable file, or every service skipped).
+
+## Import a Tiltfile
+
+`flisk import tiltfile [path]` (the package command is `flisk-import tiltfile [path]`) registers a Tiltfile the repo already has as the project's orchestration source. `flisk up` then runs that Tiltfile unchanged instead of generating one. It prints a plan, asks before writing, and writes only `.flisk/project.json`. `--dry-run` never writes; `--yes` writes without prompting; `--force` replaces an `orchestration` that is already set.
+
+```bash
+flisk import tiltfile --dry-run
+flisk import tiltfile
+flisk import tiltfile dev/Tiltfile --yes
+```
+
+### Where it looks
+
+- `path` defaults to `Tiltfile`. A folder means `<folder>/Tiltfile`; any other file name, such as `Tiltfile.dev`, is used as given.
+- The path is resolved from the current directory. The project root is the nearest folder at or above the current directory with `.flisk/project.json`; without one, it is the current directory.
+- The path is written relative to the project root, with forward slashes, for example `dev/Tiltfile` or `../shared/Tiltfile`.
+
+### What it writes
+
+```json
+{
+  "orchestration": { "source": "tiltfile", "path": "Tiltfile" }
+}
+```
+
+The key is added to the existing `.flisk/project.json`, and every other key is kept as it was. When the repo is not a Flisk project yet, the import creates the same minimal `.flisk/project.json` as the Compose import, with only the `proxy` stack enabled, plus the `orchestration` key. The Tiltfile and the rest of the source tree are never changed, and no `service.json` is written.
+
+### What it refuses
+
+Each of these exits 1 with the reason and writes nothing:
+
+- **No Tiltfile** at the path, or a folder without one.
+- **A path inside `.flisk/`**, such as `.flisk/.flisk-out/Tiltfile`: that is where Flisk writes its generated Tiltfile, which includes yours.
+- **A quote or control character** in the path. `flisk up` puts the path in its generated Tiltfile as a string, so rename the file or folder first.
+- **An `orchestration` already set** in `.flisk/project.json`, whatever its value. Pass `--force` to replace it.
+- **A `.flisk/project.json` that is not valid JSON**, or not a JSON object.
+
+### Exit codes
+
+`0` after `--dry-run` or a write, `1` for a refusal above, `2` when the write prompt is declined or closed without an answer (`Nothing written.`). The output is plain text, like the Compose import; `flisk import --json` wraps it.
+
+### Before `flisk up`
+
+Use a Flisk core that runs an imported Tiltfile ([flisk#2849](https://github.com/flisk-sh/flisk/pull/2849)). It writes `.flisk/.flisk-out/Tiltfile` as a wrapper that includes yours, so relative paths in your Tiltfile still resolve from its own folder. The importer does not check the installed version.
+
+Plain `flisk import [dir]` is still the Compose import. A Compose folder named `tiltfile` needs a path that is not the bare word: `flisk import ./tiltfile`.

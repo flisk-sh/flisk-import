@@ -5,9 +5,10 @@ import { createInterface } from "node:readline/promises";
 import { Command } from "commander";
 import "./detectors/index.js";
 import { ImportError } from "./errors.js";
-import { MIN_CORE_VERSION } from "./flisk.js";
+import { MIN_CORE_VERSION, TILTFILE_CORE } from "./flisk.js";
 import { formatPlan } from "./format.js";
 import { buildPlan } from "./plan.js";
+import { applyTiltfileImport, formatTiltfilePlan, planTiltfileImport } from "./tiltfile.js";
 import { applyWrites, manifestRelPath, planWrites } from "./write.js";
 
 async function confirm(message: string): Promise<boolean> {
@@ -26,6 +27,8 @@ async function confirm(message: string): Promise<boolean> {
 const program = new Command("flisk-import")
   .version(JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")).version)
   .description("Import services from the root docker-compose.yml into Flisk")
+  // Options after `tiltfile` belong to it, so `tiltfile --dry-run` is not read as the Compose import's --dry-run.
+  .enablePositionalOptions()
   .argument("[dir]", "Directory containing docker-compose.yml", ".")
   .option("--dry-run", "Print the plan and write nothing", false)
   .option("--yes", "Write without prompting", false)
@@ -74,6 +77,46 @@ const program = new Command("flisk-import")
       console.log(`  - Add the values listed above as missing to ${envFile}.`);
     console.log(
       `  - Run \`flisk up\` with Flisk core ${MIN_CORE_VERSION} or later. The import did not start anything.`,
+    );
+  });
+
+program
+  .command("tiltfile")
+  .description(
+    "Register an existing Tiltfile in .flisk/project.json so flisk up runs it unchanged (never edits the Tiltfile)",
+  )
+  .argument("[path]", "The Tiltfile, or a directory holding one", "Tiltfile")
+  .option("--dry-run", "Print the plan and write nothing", false)
+  .option("--yes", "Write without prompting", false)
+  .option("--force", "Replace an orchestration already set in .flisk/project.json", false)
+  .action(async (path: string, local) => {
+    // Also honour the flags when they come before `tiltfile`, where the top-level command reads them.
+    const top = program.opts();
+    const options = {
+      dryRun: local.dryRun || top.dryRun,
+      yes: local.yes || top.yes,
+      force: local.force || top.force,
+    };
+    const plan = planTiltfileImport(path, { force: options.force });
+
+    console.log(formatTiltfilePlan(plan));
+    if (options.dryRun) return void console.log("Dry run: nothing written.");
+    const target =
+      plan.action === "create" ? "Create .flisk/project.json" : "Update .flisk/project.json";
+    if (
+      !options.yes &&
+      !(await confirm(`${target} with orchestration ${plan.orchestration.path}?`))
+    ) {
+      console.log("Nothing written.");
+      process.exitCode = 2;
+      return;
+    }
+    applyTiltfileImport(plan);
+    console.log(`  wrote ${relative(process.cwd(), plan.projectJson) || ".flisk/project.json"}`);
+    console.log(`\nRegistered ${plan.orchestration.path} as the orchestration source.`);
+    console.log("\nNext:");
+    console.log(
+      `  - Run \`flisk up\` with a Flisk core that runs an imported Tiltfile (${TILTFILE_CORE}). It runs ${plan.orchestration.path} unchanged; the import did not start anything.`,
     );
   });
 
