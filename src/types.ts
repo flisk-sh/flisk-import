@@ -27,6 +27,10 @@ export interface Candidate {
   containerCommand?: string[];
   /** Compose `entrypoint` as the argument vector the container starts with. */
   containerEntrypoint?: string[];
+  /** Compose `profiles`: the service starts only when one of them is asked for. */
+  profiles?: string[];
+  /** Compose `env_file` paths, relative to the import root. */
+  envFile?: string[];
   /** Compose `models` the service uses (Docker Model Runner): the top-level name and the model reference. */
   models?: ModelRef[];
   /** Compose `healthcheck` as a probe command that exits 0 when the service is ready. */
@@ -83,6 +87,11 @@ export interface ContainerOptions {
   user?: string;
   securityOpt?: string[];
   shmSize?: string;
+  /** Compose tmpfs, each /path or /path:options. */
+  tmpfs?: string[];
+  /** Compose deploy.resources.limits. */
+  cpus?: number | string;
+  memory?: string;
 }
 
 export interface ExtraPort {
