@@ -20,7 +20,7 @@ const CLI = join(import.meta.dirname, "..", "dist", "cli.js");
 const CORPUS = join(import.meta.dirname, "corpus");
 const HEALTH_PATH = /^\/[a-z0-9/-]*$/;
 // With ${NAME}, ${NAME:-default} and ${NAME-default} Compose variables, which Flisk core resolves from the project .env.
-const IMAGE = /^(?:[A-Za-z0-9._/:@-]|\$\{[A-Za-z_][A-Za-z0-9_]*(?::?-[A-Za-z0-9._/:@-]*)?\})+$/;
+const IMAGE = /^(?:[A-Za-z0-9._/:@-]|\$\{[A-Za-z_][A-Za-z0-9_]*(?::?-[A-Za-z0-9._/:@-]+)?\})+$/;
 const names = readdirSync(CORPUS).filter((n) => statSync(join(CORPUS, n)).isDirectory());
 
 let work: string;

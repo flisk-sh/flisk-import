@@ -1303,10 +1303,40 @@ describe("pl_mail round trip: restart default, a turned-off healthcheck and imag
     return (name: string) => JSON.parse(readFileSync(serviceJson(name), "utf8"));
   }
 
-  it('writes restart "no" for a service Compose does not restart, since Flisk defaults to unless-stopped', () => {
-    const manifest = imported();
-    expect(manifest("database").restart).toBe("no");
+  it('leaves restart out for a long-running service, since Flisk runs restart "no" as a one-shot job', () => {
+    tree({ "docker-compose.yml": compose });
+    const plan = buildPlan(root);
+    const writes = planWrites(plan, false);
+    applyWrites(writes);
+    const manifest = (name: string) => JSON.parse(readFileSync(serviceJson(name), "utf8"));
+    expect(manifest("database")).not.toHaveProperty("restart");
     expect(manifest("worker").restart).toBe("unless-stopped");
+    expect(formatPlan(plan, writes)).toContain(
+      "restart not set for database, ntfy: Flisk restarts them (unless-stopped), where Compose would not restart them after a crash or a reboot",
+    );
+  });
+
+  it('writes restart "no" for a job another service waits for with service_completed_successfully (EDDI, nosia)', () => {
+    tree({
+      "docker-compose.yml": [
+        "services:",
+        "  bind-guard:",
+        "    image: alpine:3",
+        "  db-migrate:",
+        "    image: app:1",
+        "    restart: 'no'",
+        "  eddi:",
+        "    image: labsai/eddi:6",
+        "    depends_on:",
+        "      bind-guard: { condition: service_completed_successfully }",
+        "      db-migrate: { condition: service_completed_successfully }",
+      ].join("\n"),
+    });
+    applyWrites(planWrites(buildPlan(root), false));
+    const manifest = (name: string) => JSON.parse(readFileSync(serviceJson(name), "utf8"));
+    expect(manifest("bind-guard").restart).toBe("no");
+    expect(manifest("db-migrate").restart).toBe("no");
+    expect(manifest("eddi")).not.toHaveProperty("restart");
   });
 
   it("keeps disable: true and test: [NONE] as healthCheck: false, with no health path", () => {

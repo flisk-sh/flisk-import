@@ -16,7 +16,7 @@ Each Compose service becomes `services/<stack>/<service>/service.json`, where th
 | --- | --- |
 | `build` (context inside `dir`) | `buildContext` pointing at the original directory, `dockerfile` (default `Dockerfile`). With `build` and `image`, Flisk builds; it does not pull the tag. |
 | `image` (no `build`) | `image`, with `${NAME}`, `${NAME:-default}` and `${NAME-default}` kept as written (`postgres:${POSTGRES_VERSION:-18}-alpine`) for Flisk to resolve from the project `.env` |
-| `restart` | `restart`; `on-failure:N` keeps its retry limit (N from 1 to 100) |
+| `restart` | `restart`; `on-failure:N` keeps its retry limit (N from 1 to 100). No `restart` stays absent (Flisk's default `unless-stopped`, which restarts after a crash or a reboot where Compose would not; the plan names these services), except for a service another one waits for with `condition: service_completed_successfully`, which gets `"no"`: Flisk runs `restart: "no"` as a one-shot job and waits for it to exit. |
 | `stop_grace_period` (`30s`, `1m30s`, `500ms`) | `container.stopGracePeriod` |
 | `networks.<net>.aliases`, from every network | `container.networkAliases`. A service renamed to kebab-case (`lychee_api` becomes `lychee-api`) also gets its Compose name as an alias, so other services that call `http://lychee_api:8000` or set `DB_HOST=lychee_db` still reach it. A sidecar (`network_mode: service:<name>`) gets none: it shares the other service's network. |
 | `extra_hosts`, list (`name:address`, `name=address`) or map | `container.extraHosts`, each `name:address`, where the address is an IP or `host-gateway` |
