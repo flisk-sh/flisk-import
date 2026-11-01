@@ -60,6 +60,18 @@ export function findProjectRoot(start: string): string | null {
 }
 
 /**
+ * A project name Flisk accepts (flisk#1519): lowercase letters, digits, - and _, starting with a letter or digit.
+ * "Lychee" becomes "lychee", "My App" becomes "my-app".
+ */
+export function projectNameFor(projectRoot: string): string {
+  const name = basename(projectRoot)
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, "-")
+    .replace(/^[-_]+|-+$/g, "");
+  return name || "project";
+}
+
+/**
  * The minimal `.flisk/project.json` an import writes when the repo is not a Flisk project yet: the given stacks in
  * Pre-Alpha, no optional infrastructure, and discovery of every `services/<stack>/<name>` folder. A copy of the minimum
  * Flisk accepts today, so it can drift from flisk.
@@ -70,7 +82,7 @@ export function defaultProjectConfig(
 ): Record<string, unknown> {
   return {
     version: "1.0",
-    project: { name: basename(projectRoot), version: "1.0.0" },
+    project: { name: projectNameFor(projectRoot), version: "1.0.0" },
     phases: {
       pre_alpha: { name: "Pre-Alpha", ...preAlpha },
       alpha: { name: "Alpha", description: "", enabledStacks: [] },

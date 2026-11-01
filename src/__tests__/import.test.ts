@@ -1764,3 +1764,21 @@ describe("Flisk 1.4.28 fields: dependsOn conditions, buildArgs, logging, env bin
     });
   });
 });
+
+describe("an uppercase project folder (Lychee)", () => {
+  it("writes lowercase project and stack names, and records the Compose project name Compose computes", () => {
+    const upper = join(dirname(root), "My Lychee_App");
+    mkdirSync(upper, { recursive: true });
+    writeFileSync(join(upper, "docker-compose.yml"), "services:\n  web:\n    image: nginx:1\n");
+    const plan = buildPlan(upper);
+    const writes = planWrites(plan, false);
+    applyWrites(writes);
+    const config = JSON.parse(readFileSync(join(upper, ".flisk", "project.json"), "utf8"));
+    expect(config.project.name).toBe("my-lychee_app");
+    expect(writes.stack).toBe("my-lychee-app");
+    expect(config.phases.pre_alpha.enabledStacks).toEqual(["proxy", "my-lychee-app"]);
+    // Compose lowercases the folder and drops the spaces, so this is the name containers had.
+    expect(config.composeProjectNames).toEqual({ "my-lychee-app": "mylychee_app" });
+    expect(existsSync(join(upper, "services", "my-lychee-app", "web", "service.json"))).toBe(true);
+  });
+});
