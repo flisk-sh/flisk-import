@@ -264,18 +264,21 @@ export function planWrites(plan: ImportPlan, force: boolean): WritePlan {
     // Omit `image` from service.json so Flisk builds from the Dockerfile instead of pulling the tag.
     // Flisk has no container `command`, so a Compose `command` on an image becomes the CMD of a one-line Dockerfile.
     const files: WriteItem["files"] = [];
-    const wrapWithCommand = !service.dockerfile && service.image && service.containerCommand;
+    const wrapWithCommand =
+      !service.dockerfile &&
+      service.image &&
+      (service.containerCommand || service.containerEntrypoint);
     if (wrapWithCommand) {
       files.push({
         path: resolve(dirname(path), "Dockerfile"),
-        content: `# From the Compose \`command\` of this service (flisk import). Flisk sets no container command, so it lives here.\nFROM ${service.image}\nCMD ${JSON.stringify(service.containerCommand)}\n`,
+        content: `# From the Compose \`command\` of this service (flisk import). Flisk sets no container command, so it lives here.\nFROM ${service.image}\n${service.containerEntrypoint ? `ENTRYPOINT ${JSON.stringify(service.containerEntrypoint)}\n` : ""}${service.containerCommand ? `CMD ${JSON.stringify(service.containerCommand)}\n` : ""}`,
       });
       notes.push(
-        `command ${JSON.stringify(service.containerCommand)} is written as the CMD of a Dockerfile on ${service.image}`,
+        `${service.containerEntrypoint ? "entrypoint" : "command"} ${JSON.stringify(service.containerEntrypoint ?? service.containerCommand)} is written to a Dockerfile on ${service.image}`,
       );
-    } else if (service.dockerfile && service.containerCommand) {
+    } else if (service.dockerfile && (service.containerCommand || service.containerEntrypoint)) {
       notes.push(
-        `command ${JSON.stringify(service.containerCommand)} not written: set it as CMD in ${service.dockerfile}`,
+        `command/entrypoint not written: set it as CMD/ENTRYPOINT in ${service.dockerfile}`,
       );
     }
     const source: Record<string, string> = wrapWithCommand

@@ -85,7 +85,7 @@ export const EXPECTATIONS: Record<string, Expectation> = {
       db: { match: { exposeViaProxy: false, port: 5432 }, without: ["healthCheckPath"] },
       redis: privateSvc,
     },
-    plan: ["not written: set it as CMD in Dockerfile"],
+    plan: ["not written: set it as CMD/ENTRYPOINT in Dockerfile"],
   },
   "django-celery": {
     services: {
