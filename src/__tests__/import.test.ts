@@ -729,4 +729,17 @@ describe("Compose command, healthcheck, ports and restart", () => {
       retries: 30,
     });
   });
+
+  it("writes a Compose entrypoint as ENTRYPOINT and ignores networks and expose", () => {
+    tree({
+      "docker-compose.yml":
+        "services:\n  guard:\n    image: mongo:7\n    entrypoint: ['sh','-c','echo ok']\n    networks: [a]\n    expose: ['27017']\n",
+    });
+    const plan = buildPlan(root);
+    applyWrites(planWrites(plan, false));
+    expect(readFileSync(join(dirname(serviceJson("guard")), "Dockerfile"), "utf8")).toContain(
+      'FROM mongo:7\nENTRYPOINT ["sh","-c","echo ok"]\n',
+    );
+    expect(formatPlan(plan, planWrites(plan, true))).not.toContain("keys not translated");
+  });
 });

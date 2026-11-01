@@ -25,6 +25,8 @@ export interface Candidate {
   command?: string;
   /** Compose `command` as the argument vector the container runs (a string runs through `sh -c`). */
   containerCommand?: string[];
+  /** Compose `entrypoint` as the argument vector the container starts with. */
+  containerEntrypoint?: string[];
   /** Compose `healthcheck` as a probe command that exits 0 when the service is ready. */
   healthCheck?: HealthCheckProbe;
   /** The port the service listens on inside its container, as stated by the source. */

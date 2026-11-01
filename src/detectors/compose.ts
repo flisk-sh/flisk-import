@@ -55,6 +55,10 @@ const TRANSLATED_KEYS = new Set([
   "volumes",
   "restart",
   "command",
+  "entrypoint",
+  // Flisk gives every service its own stack network and container name, so these change nothing it needs.
+  "networks",
+  "expose",
 ]);
 
 const CAPABILITY = /^[A-Z_]+$/;
@@ -410,6 +414,7 @@ registerDetector({
           : [];
       const command = commandOf(raw.command);
       const containerCommand = containerCommandOf(raw.command);
+      const containerEntrypoint = containerCommandOf(raw.entrypoint);
       const healthProbe = healthProbeOf(raw.healthcheck);
       const envKeys = envNames(raw.environment);
       const env = envValues(raw.environment);
@@ -500,6 +505,7 @@ registerDetector({
         ...(dockerfile ? { dockerfile } : {}),
         ...(command ? { command } : {}),
         ...(containerCommand ? { containerCommand } : {}),
+        ...(containerEntrypoint ? { containerEntrypoint } : {}),
         ...(healthProbe ? { healthCheck: healthProbe } : {}),
         ...(selectedPort !== undefined ? { port: selectedPort } : {}),
         ...(healthCheckPath ? { healthCheckPath } : {}),
