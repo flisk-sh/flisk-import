@@ -539,10 +539,10 @@ describe("Compose runtime keys (capabilities, ports, network_mode, volumes, rest
     expect(manifest("caddy").volumes).toEqual([
       { source: "../../../deploy/Caddyfile", target: "/etc/caddy/Caddyfile", readOnly: true },
       { source: "../../../web", target: "/srv/web", readOnly: true },
-      { source: "caddy-data", target: "/data" },
+      { source: "caddy-data", target: "/data", name: "shop_caddy-data" },
     ]);
     expect(manifest("db").volumes).toEqual([
-      { source: "postgres-data", target: "/var/lib/postgresql/data" },
+      { source: "postgres-data", target: "/var/lib/postgresql/data", name: "shop_postgres-data" },
     ]);
   });
 
@@ -751,6 +751,33 @@ describe("Compose command, healthcheck, ports and restart", () => {
     applyWrites(planWrites(buildPlan(root), false));
     expect(JSON.parse(readFileSync(serviceJson("web"), "utf8")).models).toEqual([
       { name: "llm", model: "ai/smollm2" },
+    ]);
+  });
+
+  it("names each volume as docker compose created it, so the install's data is reused", () => {
+    tree({
+      "docker-compose.yml": [
+        "name: My-App",
+        "services:",
+        "  db:",
+        "    image: postgres:16",
+        "    volumes: [pg:/var/lib/postgresql/data, mysql:/m, shared:/s, vars:/v]",
+        "volumes:",
+        "  pg:",
+        "  mysql:",
+        "    name: lychee_prod_mysql",
+        "  shared:",
+        "    external: true",
+        "  vars:",
+        "    name: ${PREFIX}_vars",
+      ].join("\n"),
+    });
+    applyWrites(planWrites(buildPlan(root), false));
+    expect(JSON.parse(readFileSync(serviceJson("db"), "utf8")).volumes).toEqual([
+      { source: "pg", target: "/var/lib/postgresql/data", name: "my-app_pg" },
+      { source: "mysql", target: "/m", name: "lychee_prod_mysql" },
+      { source: "shared", target: "/s", name: "shared" },
+      { source: "vars", target: "/v" },
     ]);
   });
 });
