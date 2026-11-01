@@ -6,6 +6,7 @@ import {
   defaultProjectConfig,
   findProjectRoot,
   IMAGE_PATTERN,
+  NETWORK_ALIAS,
   SERVICE_MANIFEST_SCHEMA_URL,
   SERVICE_MANIFEST_SCHEMA_VERSION,
   validateName,
@@ -142,7 +143,7 @@ export function planWrites(plan: ImportPlan, force: boolean): WritePlan {
         : !service.image
           ? "Compose gives it neither `image` nor a usable `build`"
           : !IMAGE_PATTERN.test(service.image)
-            ? `image "${service.image}" uses Compose variables or characters Flisk does not accept; set a literal image in docker-compose.yml, or write this service.json by hand`
+            ? `image "${service.image}" has characters Flisk does not accept (Compose variables may only be \${NAME}, \${NAME:-default} or \${NAME-default}); fix it in docker-compose.yml, or write this service.json by hand`
             : undefined;
     if (reason) rejected.push({ name: service.name, reason });
     return !reason;
@@ -298,6 +299,35 @@ export function planWrites(plan: ImportPlan, force: boolean): WritePlan {
         : undefined;
     if (service.sidecarOf && !sidecarOf)
       notes.push(`network_mode not written: "${service.sidecarOf}" is not in this import`);
+    // A renamed service keeps its Compose name as a network alias, so `http://lychee_api:8000` or `DB_HOST=lychee_db`
+    // in another service still resolves. A sidecar has no network of its own, so it gets no aliases.
+    const renamed =
+      service.originalName && service.originalName !== service.name
+        ? service.originalName
+        : undefined;
+    const keepRenamed = renamed !== undefined && NETWORK_ALIAS.test(renamed);
+    if (renamed && !keepRenamed)
+      notes.push(`"${renamed}" is not kept as a network alias: it is not a DNS name`);
+    const aliases = [
+      ...new Set([...(service.container?.networkAliases ?? []), ...(keepRenamed ? [renamed] : [])]),
+    ].filter((alias) => alias !== service.name);
+    let container = service.container;
+    if (sidecarOf) {
+      if (aliases.length)
+        notes.push(
+          `network aliases not written (${aliases.join(", ")}): a sidecar shares "${sidecarOf}"'s network`,
+        );
+      if (container?.networkAliases) {
+        const { networkAliases: _aliases, ...rest } = container;
+        container = Object.keys(rest).length ? rest : undefined;
+      }
+    } else if (aliases.length) {
+      container = { ...(container ?? {}), networkAliases: aliases };
+      if (keepRenamed)
+        notes.push(
+          `network alias "${renamed}" keeps the Compose name, so other services that call it by that name still reach it`,
+        );
+    }
     const extraPorts = sidecarOf ? [] : (service.extraPorts ?? []);
     if (sidecarOf && service.extraPorts?.length)
       notes.push(
@@ -360,7 +390,7 @@ export function planWrites(plan: ImportPlan, force: boolean): WritePlan {
         : {}),
       ...(secretNames.length ? { secrets: { required: secretNames } } : {}),
       ...(service.restart ? { restart: service.restart } : {}),
-      ...(service.container ? { container: service.container } : {}),
+      ...(container ? { container } : {}),
       ...(service.models ? { models: service.models } : {}),
       ...(service.profiles ? { profiles: service.profiles } : {}),
       ...(envFile.length ? { envFile } : {}),

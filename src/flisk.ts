@@ -24,7 +24,15 @@ export const BYO_PORT_RANGE = { min: 4000, max: 5999, label: "4000-5999" } as co
  * the manifest (flisk `cli/src/utils/service-manifest.ts`, engine `manifest/parser.star`).
  */
 export const HEALTH_CHECK_PATH_PATTERN = /^\/[a-z0-9/-]*$/;
-export const IMAGE_PATTERN = /^[A-Za-z0-9._/:@-]+$/;
+/**
+ * An image reference, which may hold Compose variables `${NAME}`, `${NAME:-default}` and `${NAME-default}` (postgres:${PG_VERSION:-18}-alpine);
+ * Compose resolves them from the project .env. Nothing else: no quotes, spaces or newlines that could change generated YAML.
+ */
+export const IMAGE_PATTERN =
+  /^(?:[A-Za-z0-9._/:@-]|\$\{[A-Za-z_][A-Za-z0-9_]*(?::?-[A-Za-z0-9._/:@-]*)?\})+$/;
+
+/** A DNS name for a network alias: letters, digits, '-', '_' and '.'. */
+export const NETWORK_ALIAS = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,252}$/;
 
 const KEBAB = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 

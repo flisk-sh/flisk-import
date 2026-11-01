@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, normalize } from "node:path/posix";
 import { isAlias, isMap, type Node, parseDocument, visit } from "yaml";
-import { HEALTH_CHECK_PATH_PATTERN } from "../flisk.js";
+import { HEALTH_CHECK_PATH_PATTERN, NETWORK_ALIAS } from "../flisk.js";
 import { registerDetector } from "../registry.js";
 import type {
   Candidate,
@@ -62,9 +62,14 @@ const TRANSLATED_KEYS = new Set([
   "env_file",
   "tmpfs",
   "deploy",
-  // Flisk gives every service its own stack network and container name, so these change nothing it needs.
+  "stop_grace_period",
+  "extra_hosts",
+  "ulimits",
+  // Only `aliases` is read from networks: Flisk gives every service its own stack network.
   "networks",
   "expose",
+  // Flisk names every container itself; the plan says so.
+  "container_name",
 ]);
 
 const CAPABILITY = /^[A-Z_]+$/;
@@ -74,6 +79,125 @@ const VOLUME_NAME = /^[a-z0-9][a-z0-9_-]*$/;
 const CONTAINER_PATH = /^\/[A-Za-z0-9_./-]*$/;
 const HOST_PATH = /^[A-Za-z0-9_./-]+$/;
 const RESTART = new Set(["no", "on-failure", "unless-stopped", "always"]);
+/** `on-failure:N` with a retry limit from 1 to 100. */
+const RESTART_LIMIT = /^on-failure:([1-9][0-9]?|100)$/;
+/** A Compose duration such as 30s, 1m30s or 500ms. */
+const DURATION = /^(?:[0-9]+(?:\.[0-9]+)?(?:h|ms|us|m|s))+$/;
+const EXTRA_HOST_NAME = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,252}$/;
+/** An extra_hosts address: host-gateway, IPv4, or IPv6 (optionally in brackets). */
+const EXTRA_HOST_ADDRESS =
+  /^(?:host-gateway|[0-9]{1,3}(?:\.[0-9]{1,3}){3}|\[?[0-9A-Fa-f.]*:[0-9A-Fa-f.]*:[0-9A-Fa-f:.]*\]?)$/;
+const ULIMIT_NAME = /^[a-z]+$/;
+
+/** One extra_hosts entry as `name:address`; undefined when either side is not one Flisk accepts. */
+function extraHostOf(name: unknown, address: unknown): string | undefined {
+  if (typeof name !== "string" || typeof address !== "string") return undefined;
+  return EXTRA_HOST_NAME.test(name) && EXTRA_HOST_ADDRESS.test(address)
+    ? `${name}:${address}`
+    : undefined;
+}
+
+/** Compose extra_hosts in list form (`name:address` or `name=address`) or map form. */
+function extraHostsOf(value: unknown): { kept: string[]; bad: unknown[] } {
+  const kept: string[] = [];
+  const bad: unknown[] = [];
+  if (Array.isArray(value)) {
+    for (const entry of value) {
+      const at = typeof entry === "string" ? entry.search(/[:=]/) : -1;
+      const host =
+        typeof entry === "string" && at > 0
+          ? extraHostOf(entry.slice(0, at), entry.slice(at + 1))
+          : undefined;
+      if (host) kept.push(host);
+      else bad.push(entry);
+    }
+  } else if (isObj(value)) {
+    for (const [name, address] of Object.entries(value)) {
+      const host = extraHostOf(name, address);
+      if (host) kept.push(host);
+      else bad.push({ [name]: address });
+    }
+  } else {
+    bad.push(value);
+  }
+  return { kept: [...new Set(kept)], bad };
+}
+
+type Ulimits = NonNullable<ContainerOptions["ulimits"]>;
+
+/** Compose ulimits: each a whole number, or { soft, hard } whole numbers with soft no greater than hard. */
+function ulimitsOf(value: unknown): { kept: Ulimits; bad: string[] } {
+  const kept: Ulimits = {};
+  const bad: string[] = [];
+  if (!isObj(value)) return { kept, bad: [JSON.stringify(value)] };
+  for (const [name, limit] of Object.entries(value)) {
+    if (!ULIMIT_NAME.test(name)) bad.push(name);
+    else if (typeof limit === "number" && Number.isInteger(limit)) kept[name] = limit;
+    else if (
+      isObj(limit) &&
+      Number.isInteger(limit.soft) &&
+      Number.isInteger(limit.hard) &&
+      Object.keys(limit).every((k) => k === "soft" || k === "hard") &&
+      (limit.hard === -1 || (limit.soft as number) <= (limit.hard as number))
+    )
+      kept[name] = { soft: limit.soft as number, hard: limit.hard as number };
+    else bad.push(name);
+  }
+  return { kept, bad };
+}
+
+/** Aliases from every network in a `networks` map; the list form names networks only. */
+function networkAliasesOf(value: unknown): { kept: string[]; bad: unknown[] } {
+  const kept: string[] = [];
+  const bad: unknown[] = [];
+  if (!isObj(value)) return { kept, bad };
+  for (const network of Object.values(value)) {
+    if (!isObj(network) || network.aliases === undefined) continue;
+    const aliases = Array.isArray(network.aliases) ? network.aliases : [network.aliases];
+    for (const alias of aliases) {
+      if (typeof alias === "string" && NETWORK_ALIAS.test(alias)) kept.push(alias);
+      else bad.push(alias);
+    }
+  }
+  return { kept: [...new Set(kept)], bad };
+}
+
+/** stop_grace_period, network aliases, extra_hosts and ulimits, and a line for each value that is not carried over. */
+function networkOptionsOf(raw: Obj): { options: ContainerOptions; dropped: string[] } {
+  const options: ContainerOptions = {};
+  const dropped: string[] = [];
+  if (raw.stop_grace_period !== undefined) {
+    if (typeof raw.stop_grace_period === "string" && DURATION.test(raw.stop_grace_period))
+      options.stopGracePeriod = raw.stop_grace_period;
+    else
+      dropped.push(
+        `stop_grace_period ${JSON.stringify(raw.stop_grace_period)} is not a duration such as 30s or 1m30s; not used`,
+      );
+  }
+  const aliases = networkAliasesOf(raw.networks);
+  if (aliases.kept.length) options.networkAliases = aliases.kept;
+  if (aliases.bad.length)
+    dropped.push(
+      `network aliases ${JSON.stringify(aliases.bad)} are not DNS names (letters, digits, '-', '_' and '.'); not used`,
+    );
+  if (raw.extra_hosts !== undefined) {
+    const hosts = extraHostsOf(raw.extra_hosts);
+    if (hosts.kept.length) options.extraHosts = hosts.kept;
+    if (hosts.bad.length)
+      dropped.push(
+        `extra_hosts ${JSON.stringify(hosts.bad)} are not name:address (an IP or host-gateway); not used`,
+      );
+  }
+  if (raw.ulimits !== undefined) {
+    const limits = ulimitsOf(raw.ulimits);
+    if (Object.keys(limits.kept).length) options.ulimits = limits.kept;
+    if (limits.bad.length)
+      dropped.push(
+        `ulimits ${limits.bad.join(", ")} are not a whole number or { soft, hard } with soft <= hard; not used`,
+      );
+  }
+  return { options, dropped };
+}
 
 /** Compose `shm_size` as a size string such as 256mb; a number is bytes. */
 function shmSizeOf(value: unknown): string | undefined {
@@ -124,8 +248,11 @@ function containerOf(raw: Obj): { container?: ContainerOptions; dropped: string[
 }
 
 /** One published port: container port, host port when Compose names a literal one, and protocol. */
-/** A `publish` value Flisk accepts: digits, dots, colons and `${NAME:-default}` with a port or IPv4 address:port default. */
-const PUBLISH = /^(?:[0-9.:]|\$\{[A-Za-z_][A-Za-z0-9_]*:-[0-9.:]+\})+$/;
+/**
+ * A `publish` value Flisk accepts: digits, dots, colons and `${NAME:-default}` or `${NAME-default}` with a port or IPv4
+ * address:port default.
+ */
+const PUBLISH = /^(?:[0-9.:]|\$\{[A-Za-z_][A-Za-z0-9_]*:?-[0-9.:]+\})+$/;
 
 /** The host address and port of a published port. Compose publishes on every interface unless an address is given. */
 function hostSideOf(port: number, hostIp: string | undefined, hostPort: string | undefined) {
@@ -295,11 +422,71 @@ function commandOf(command: unknown): string | undefined {
   return undefined;
 }
 
-/** Compose `command` as the argument vector the container runs; a string goes through a shell, as Compose runs it. */
-function containerCommandOf(command: unknown): string[] | undefined {
-  if (typeof command === "string" && command.trim()) return ["sh", "-c", command];
+/**
+ * A Compose `command`/`entrypoint` string split into arguments the way Compose splits it (shell words: whitespace,
+ * '...' kept as it is, "..." with \" \\ \$ \` escapes, a backslash escaping the next character). Compose runs no shell.
+ * Undefined when the quotes or a trailing backslash do not balance.
+ */
+export function shellWords(text: string): string[] | undefined {
+  const words: string[] = [];
+  let word = "";
+  let inWord = false;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i] as string;
+    if (ch === "'") {
+      const end = text.indexOf("'", i + 1);
+      if (end === -1) return undefined;
+      word += text.slice(i + 1, end);
+      inWord = true;
+      i = end;
+    } else if (ch === '"') {
+      inWord = true;
+      let closed = false;
+      for (i++; i < text.length; i++) {
+        const c = text[i] as string;
+        if (c === '"') {
+          closed = true;
+          break;
+        }
+        if (c === "\\" && i + 1 < text.length && '"\\$`'.includes(text[i + 1] as string)) {
+          word += text[i + 1];
+          i++;
+        } else word += c;
+      }
+      if (!closed) return undefined;
+    } else if (ch === "\\") {
+      if (i + 1 >= text.length) return undefined;
+      word += text[i + 1];
+      inWord = true;
+      i++;
+    } else if (/\s/.test(ch)) {
+      if (inWord) words.push(word);
+      word = "";
+      inWord = false;
+    } else {
+      word += ch;
+      inWord = true;
+    }
+  }
+  if (inWord) words.push(word);
+  return words;
+}
+
+/**
+ * Compose `command`/`entrypoint` as the argument vector the container runs. A list is kept as it is; a string is split
+ * into words as Compose splits it, with no shell, so an image ENTRYPOINT (minio) gets `server /export` as its arguments.
+ * Only a string that cannot be split, or that reads `$VAR` at run time, runs through `sh -c`; `shell` says why.
+ */
+function containerCommandOf(command: unknown): { argv: string[]; shell?: string } | undefined {
+  if (typeof command === "string" && command.trim()) {
+    if (command.includes("$")) return { argv: ["sh", "-c", command], shell: "uses $ variables" };
+    const words = shellWords(command);
+    return words?.length
+      ? { argv: words }
+      : { argv: ["sh", "-c", command], shell: "has unbalanced quotes" };
+  }
   if (Array.isArray(command) && command.length > 0 && command.every((c) => typeof c === "string"))
-    return command as string[];
+    return { argv: command as string[] };
   return undefined;
 }
 
@@ -562,8 +749,20 @@ registerDetector({
           : [];
       const command = commandOf(raw.command);
       const models = modelsOf(raw.models, isObj(root) ? root.models : undefined);
-      const containerCommand = containerCommandOf(raw.command);
-      const containerEntrypoint = containerCommandOf(raw.entrypoint);
+      const commandArgs = containerCommandOf(raw.command);
+      const entrypointArgs = containerCommandOf(raw.entrypoint);
+      const containerCommand = commandArgs?.argv;
+      const containerEntrypoint = entrypointArgs?.argv;
+      for (const [key, args] of [
+        ["command", commandArgs],
+        ["entrypoint", entrypointArgs],
+      ] as const) {
+        if (args?.shell)
+          skips.push({
+            ...base,
+            reason: `service "${name}" ${key} ${JSON.stringify(raw[key])} ${args.shell}; it runs through sh -c, which Compose would not do`,
+          });
+      }
       const healthProbe = healthProbeOf(raw.healthcheck);
       const envKeys = envNames(raw.environment);
       const env = envValues(raw.environment);
@@ -582,10 +781,18 @@ registerDetector({
       const { container: options, dropped } = containerOf(raw);
       const limits = runtimeLimitsOf(raw);
       const { dropped: limitsDropped, ...limitValues } = limits;
-      const container =
-        options || Object.keys(limitValues).length
-          ? { ...(options ?? {}), ...limitValues }
-          : undefined;
+      const network = networkOptionsOf(raw);
+      const merged = { ...(options ?? {}), ...limitValues, ...network.options };
+      const container = Object.keys(merged).length ? merged : undefined;
+      for (const reason of network.dropped) {
+        skips.push({ ...base, reason: `service "${name}" ${reason}` });
+      }
+      if (raw.container_name !== undefined) {
+        skips.push({
+          ...base,
+          reason: `service "${name}" container_name ${JSON.stringify(raw.container_name)} is dropped: Flisk names containers itself; other services reach it by its service name`,
+        });
+      }
       for (const key of limitsDropped) {
         skips.push({ ...base, reason: `service "${name}" ${key} is not carried over; not used` });
       }
@@ -633,25 +840,16 @@ registerDetector({
             reason: `service "${name}" volume ${JSON.stringify(entry)} is not translated (an anonymous volume, a path outside the imported directory, or Compose variables); not mounted`,
           });
       }
-      // `on-failure:5` caps the retries; Flisk has the policy without the cap.
-      const restartName =
-        typeof raw.restart === "string"
-          ? raw.restart.replace(/^(on-failure):\d+$/, "$1")
-          : undefined;
+      // `on-failure:5` caps the retries at 5; service.json keeps the cap (1 to 100).
       const restart =
-        restartName !== undefined && RESTART.has(restartName)
-          ? (restartName as Candidate["restart"])
+        typeof raw.restart === "string" &&
+        (RESTART.has(raw.restart) || RESTART_LIMIT.test(raw.restart))
+          ? (raw.restart as Candidate["restart"])
           : undefined;
-      if (restart && restartName !== raw.restart) {
-        skips.push({
-          ...base,
-          reason: `service "${name}" restart ${JSON.stringify(raw.restart)} keeps "${restart}"; the retry limit is not carried over`,
-        });
-      }
       if (raw.restart !== undefined && !restart) {
         skips.push({
           ...base,
-          reason: `service "${name}" restart ${JSON.stringify(raw.restart)} is not a policy Flisk accepts; not used`,
+          reason: `service "${name}" restart ${JSON.stringify(raw.restart)} is not a policy Flisk accepts (no, always, unless-stopped, on-failure, on-failure:1 to 100); not used`,
         });
       }
       const untranslated = Object.keys(raw).filter((key) => !TRANSLATED_KEYS.has(key));
