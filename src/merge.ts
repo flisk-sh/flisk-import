@@ -7,6 +7,7 @@ import type {
   ContainerOptions,
   ExtraPort,
   HealthCheckProbe,
+  ModelRef,
   Skip,
   Source,
   VolumeMount,
@@ -27,6 +28,7 @@ export interface MergedService {
   command?: string;
   containerCommand?: string[];
   containerEntrypoint?: string[];
+  models?: ModelRef[];
   healthCheck?: HealthCheckProbe;
   /** Procfile commands retained for the importer's buildability check. */
   procfileCommands: string[];
@@ -114,7 +116,8 @@ function firstOf<
     | "restart"
     | "containerCommand"
     | "containerEntrypoint"
-    | "healthCheck",
+    | "healthCheck"
+    | "models",
 >(ordered: Candidate[], key: K): Partial<Pick<Candidate, K>> {
   const holder = ordered.find((c) => c[key] !== undefined);
   return holder ? ({ [key]: holder[key] } as Partial<Pick<Candidate, K>>) : {};
@@ -145,6 +148,7 @@ function mergeGroup(
     ...firstOf(ordered, "restart"),
     ...firstOf(ordered, "containerCommand"),
     ...firstOf(ordered, "containerEntrypoint"),
+    ...firstOf(ordered, "models"),
     ...firstOf(ordered, "healthCheck"),
     ...(ordered.find((c) => c.sidecarOf)?.sidecarOf
       ? { sidecarOf: resolve(ordered.find((c) => c.sidecarOf)?.sidecarOf as string) }

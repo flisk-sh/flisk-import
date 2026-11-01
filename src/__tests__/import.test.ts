@@ -742,4 +742,15 @@ describe("Compose command, healthcheck, ports and restart", () => {
     );
     expect(formatPlan(plan, planWrites(plan, true))).not.toContain("keys not translated");
   });
+
+  it("keeps Compose models as service.json models", () => {
+    tree({
+      "docker-compose.yml":
+        "services:\n  web:\n    image: app:1\n    models: [llm]\nmodels:\n  llm:\n    model: ai/smollm2\n",
+    });
+    applyWrites(planWrites(buildPlan(root), false));
+    expect(JSON.parse(readFileSync(serviceJson("web"), "utf8")).models).toEqual([
+      { name: "llm", model: "ai/smollm2" },
+    ]);
+  });
 });

@@ -27,6 +27,8 @@ export interface Candidate {
   containerCommand?: string[];
   /** Compose `entrypoint` as the argument vector the container starts with. */
   containerEntrypoint?: string[];
+  /** Compose `models` the service uses (Docker Model Runner): the top-level name and the model reference. */
+  models?: ModelRef[];
   /** Compose `healthcheck` as a probe command that exits 0 when the service is ready. */
   healthCheck?: HealthCheckProbe;
   /** The port the service listens on inside its container, as stated by the source. */
@@ -58,6 +60,11 @@ export interface Candidate {
   restart?: "no" | "on-failure" | "unless-stopped" | "always";
   confidence: Confidence;
   sources: Source[];
+}
+
+export interface ModelRef {
+  name: string;
+  model: string;
 }
 
 export interface HealthCheckProbe {

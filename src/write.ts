@@ -339,6 +339,7 @@ export function planWrites(plan: ImportPlan, force: boolean): WritePlan {
       ...(secretNames.length ? { secrets: { required: secretNames } } : {}),
       ...(service.restart ? { restart: service.restart } : {}),
       ...(service.container ? { container: service.container } : {}),
+      ...(service.models ? { models: service.models } : {}),
       ...(extraPorts.length ? { extraPorts } : {}),
       ...(sidecarOf ? { sidecarOf } : {}),
       ...(volumes.length

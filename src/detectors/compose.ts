@@ -8,6 +8,7 @@ import type {
   ContainerOptions,
   ExtraPort,
   HealthCheckProbe,
+  ModelRef,
   Skip,
   VolumeMount,
 } from "../types.js";
@@ -56,6 +57,7 @@ const TRANSLATED_KEYS = new Set([
   "restart",
   "command",
   "entrypoint",
+  "models",
   // Flisk gives every service its own stack network and container name, so these change nothing it needs.
   "networks",
   "expose",
@@ -276,6 +278,23 @@ function healthProbeOf(healthcheck: unknown): HealthCheckProbe | undefined {
   };
 }
 
+/** The models a service uses, joined to their top-level definitions. A model without a literal `model` is skipped. */
+function modelsOf(uses: unknown, defined: unknown): ModelRef[] | undefined {
+  const names = Array.isArray(uses) ? uses : isObj(uses) ? Object.keys(uses) : [];
+  const out: ModelRef[] = [];
+  for (const name of names) {
+    const def = isObj(defined) && typeof name === "string" ? defined[name] : undefined;
+    if (
+      typeof name === "string" &&
+      isObj(def) &&
+      typeof def.model === "string" &&
+      /^[A-Za-z0-9_.-]+$/.test(name)
+    )
+      out.push({ name, model: def.model });
+  }
+  return out.length ? out : undefined;
+}
+
 function healthPathOf(healthcheck: unknown): string | undefined {
   if (!isObj(healthcheck) || !Array.isArray(healthcheck.test)) return undefined;
   const test = healthcheck.test
@@ -413,6 +432,7 @@ registerDetector({
           ? Object.keys(raw.depends_on)
           : [];
       const command = commandOf(raw.command);
+      const models = modelsOf(raw.models, isObj(root) ? root.models : undefined);
       const containerCommand = containerCommandOf(raw.command);
       const containerEntrypoint = containerCommandOf(raw.entrypoint);
       const healthProbe = healthProbeOf(raw.healthcheck);
@@ -506,6 +526,7 @@ registerDetector({
         ...(command ? { command } : {}),
         ...(containerCommand ? { containerCommand } : {}),
         ...(containerEntrypoint ? { containerEntrypoint } : {}),
+        ...(models ? { models } : {}),
         ...(healthProbe ? { healthCheck: healthProbe } : {}),
         ...(selectedPort !== undefined ? { port: selectedPort } : {}),
         ...(healthCheckPath ? { healthCheckPath } : {}),
