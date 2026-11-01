@@ -121,9 +121,9 @@ export const EXPECTATIONS: Record<string, Expectation> = {
     plan: ["port entries that were not understood and ignored", "only 8080 was read"],
   },
   "profiles-and-extends": {
-    services: { web: { match: { port: 4000 } } },
-    notWritten: ["debug", "api2"],
-    plan: ['service "debug" has profiles', 'service "api2" uses `extends`'],
+    services: { web: { match: { port: 4000 } }, debug: { match: { profiles: ["debug"] } } },
+    notWritten: ["api2"],
+    plan: ['service "api2" uses `extends`'],
   },
   "out-of-tree-build": {
     services: { web: { match: { port: 4001 } } },
@@ -194,6 +194,6 @@ export const EXPECTATIONS: Record<string, Expectation> = {
     services: { api: { without: ["dependsOn"] } },
     plan: ["dependsOn not written, not in this import: ghost"],
   },
-  "all-skipped": { exit: 1, notWritten: ["only"], plan: ['service "only" has profiles'] },
+  "all-skipped": { exit: 1, notWritten: ["only"], plan: ['service "only" uses `extends`'] },
   "invalid-yaml": { exit: 1, plan: ["invalid YAML"] },
 };

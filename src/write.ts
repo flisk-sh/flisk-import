@@ -333,6 +333,16 @@ export function planWrites(plan: ImportPlan, force: boolean): WritePlan {
       const rel = relative(serviceDir, absolute).split("\\").join("/") || ".";
       return [{ ...volume, source: rel.startsWith(".") ? rel : `./${rel}` }];
     });
+    // env_file paths are relative to the service directory in service.json, and must stay inside the project.
+    const envFile = (service.envFile ?? []).flatMap((file) => {
+      const absolute = resolve(plan.root, file);
+      const fromProject = relative(projectRoot, absolute).split("\\").join("/");
+      if (fromProject === ".." || fromProject.startsWith("../")) {
+        notes.push(`env_file ${file} not written: it is outside the project`);
+        return [];
+      }
+      return [relative(serviceDir, absolute).split("\\").join("/")];
+    });
     const manifest: Record<string, unknown> = {
       $schema: SERVICE_MANIFEST_SCHEMA_URL,
       schemaVersion: SERVICE_MANIFEST_SCHEMA_VERSION,
@@ -352,6 +362,8 @@ export function planWrites(plan: ImportPlan, force: boolean): WritePlan {
       ...(service.restart ? { restart: service.restart } : {}),
       ...(service.container ? { container: service.container } : {}),
       ...(service.models ? { models: service.models } : {}),
+      ...(service.profiles ? { profiles: service.profiles } : {}),
+      ...(envFile.length ? { envFile } : {}),
       ...(extraPorts.length ? { extraPorts } : {}),
       ...(sidecarOf ? { sidecarOf } : {}),
       ...(volumes.length

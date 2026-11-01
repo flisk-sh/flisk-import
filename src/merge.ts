@@ -29,6 +29,8 @@ export interface MergedService {
   containerCommand?: string[];
   containerEntrypoint?: string[];
   models?: ModelRef[];
+  profiles?: string[];
+  envFile?: string[];
   healthCheck?: HealthCheckProbe;
   /** Procfile commands retained for the importer's buildability check. */
   procfileCommands: string[];
@@ -117,7 +119,9 @@ function firstOf<
     | "containerCommand"
     | "containerEntrypoint"
     | "healthCheck"
-    | "models",
+    | "models"
+    | "profiles"
+    | "envFile",
 >(ordered: Candidate[], key: K): Partial<Pick<Candidate, K>> {
   const holder = ordered.find((c) => c[key] !== undefined);
   return holder ? ({ [key]: holder[key] } as Partial<Pick<Candidate, K>>) : {};
@@ -149,6 +153,8 @@ function mergeGroup(
     ...firstOf(ordered, "containerCommand"),
     ...firstOf(ordered, "containerEntrypoint"),
     ...firstOf(ordered, "models"),
+    ...firstOf(ordered, "profiles"),
+    ...firstOf(ordered, "envFile"),
     ...firstOf(ordered, "healthCheck"),
     ...(ordered.find((c) => c.sidecarOf)?.sidecarOf
       ? { sidecarOf: resolve(ordered.find((c) => c.sidecarOf)?.sidecarOf as string) }

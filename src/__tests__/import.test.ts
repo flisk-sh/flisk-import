@@ -289,12 +289,12 @@ describe("Compose values Flisk cannot take as they are", () => {
         "  api:",
         "    image: example/api:1",
         "    command: npm run start:prod",
-        "    env_file: .env.api",
+        "    logging: { driver: json-file }",
         "    volumes: ['./data:/data']",
       ].join("\n"),
     );
-    expect(text).toContain('service "api" keys not translated: env_file');
-    expect(text).not.toContain("env_file, volumes");
+    expect(text).toContain('service "api" keys not translated: logging');
+    expect(text).not.toContain("logging, volumes");
   });
 
   it("does not import a service whose build context is outside the directory", () => {
@@ -821,5 +821,36 @@ describe("Compose command, healthcheck, ports and restart", () => {
       { source: "shared", target: "/s", name: "shared" },
       { source: "vars", target: "/v" },
     ]);
+  });
+
+  it("keeps profiles, env_file, tmpfs and deploy limits", () => {
+    tree({
+      "docker-compose.yml": [
+        "services:",
+        "  api:",
+        "    image: ghcr.io/lycheeorg/lychee:latest",
+        "    profiles: [nsfw]",
+        "    env_file:",
+        "      - path: ./.env",
+        "    tmpfs:",
+        "      - /tmp:noexec,nosuid,nodev,size=100m",
+        "    deploy:",
+        "      resources:",
+        "        limits: { cpus: '2', memory: 2G }",
+        "        reservations: { cpus: '0.5' }",
+      ].join("\n"),
+    });
+    const plan = buildPlan(root);
+    const writes = planWrites(plan, false);
+    applyWrites(writes);
+    const api = JSON.parse(readFileSync(serviceJson("api"), "utf8"));
+    expect(api.profiles).toEqual(["nsfw"]);
+    expect(api.envFile).toEqual(["../../../.env"]);
+    expect(api.container).toEqual({
+      tmpfs: ["/tmp:noexec,nosuid,nodev,size=100m"],
+      cpus: 2,
+      memory: "2G",
+    });
+    expect(formatPlan(plan, writes)).toContain("deploy.resources.reservations is not carried over");
   });
 });

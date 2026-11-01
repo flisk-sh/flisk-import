@@ -1,4 +1,5 @@
 services:
   only:
-    image: example/only:1
-    profiles: [never]
+    extends:
+      file: other.yml
+      service: only

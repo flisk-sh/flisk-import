@@ -58,6 +58,10 @@ const TRANSLATED_KEYS = new Set([
   "command",
   "entrypoint",
   "models",
+  "profiles",
+  "env_file",
+  "tmpfs",
+  "deploy",
   // Flisk gives every service its own stack network and container name, so these change nothing it needs.
   "networks",
   "expose",
@@ -353,6 +357,71 @@ function modelsOf(uses: unknown, defined: unknown): ModelRef[] | undefined {
   return out.length ? out : undefined;
 }
 
+const PROFILE = /^[a-z0-9][a-z0-9-]*$/;
+const TMPFS = /^\/[A-Za-z0-9_./-]*(:[a-z0-9=,_-]+)?$/;
+
+function profilesOf(value: unknown): string[] | undefined {
+  if (!Array.isArray(value) || value.length === 0) return undefined;
+  return value.every((p) => typeof p === "string" && PROFILE.test(p))
+    ? [...new Set(value as string[])]
+    : undefined;
+}
+
+/** Compose env_file entries (a string, strings, or { path, required }) as paths from the import root; undefined when one leaves it. */
+function envFilesOf(value: unknown, composeDir: string): string[] | undefined {
+  const entries = typeof value === "string" ? [value] : Array.isArray(value) ? value : [];
+  const out: string[] = [];
+  for (const entry of entries) {
+    const path = typeof entry === "string" ? entry : isObj(entry) ? entry.path : undefined;
+    if (typeof path !== "string" || isAbsolute(path) || path.includes("$")) return undefined;
+    const resolved = normalize(join(composeDir, path));
+    if (resolved === ".." || resolved.startsWith("../") || !/^[A-Za-z0-9_./-]+$/.test(resolved))
+      return undefined;
+    out.push(resolved);
+  }
+  return out.length ? out : undefined;
+}
+
+/** tmpfs and deploy.resources.limits, and the parts that could not be carried over. */
+function runtimeLimitsOf(raw: Obj): {
+  tmpfs?: string[];
+  cpus?: number | string;
+  memory?: string;
+  dropped: string[];
+} {
+  const dropped: string[] = [];
+  const out: { tmpfs?: string[]; cpus?: number | string; memory?: string } = {};
+  if (raw.tmpfs !== undefined) {
+    const list =
+      typeof raw.tmpfs === "string" ? [raw.tmpfs] : Array.isArray(raw.tmpfs) ? raw.tmpfs : [];
+    const kept = list.filter((t): t is string => typeof t === "string" && TMPFS.test(t));
+    if (kept.length !== list.length || list.length === 0) dropped.push("tmpfs");
+    if (kept.length) out.tmpfs = kept;
+  }
+  if (raw.deploy !== undefined) {
+    const deploy = isObj(raw.deploy) ? raw.deploy : {};
+    const resources = isObj(deploy.resources) ? deploy.resources : {};
+    const limits = isObj(resources.limits) ? resources.limits : {};
+    const cpus = typeof limits.cpus === "number" ? String(limits.cpus) : limits.cpus;
+    if (typeof cpus === "string" && /^[0-9]+(\.[0-9]{1,2})?$/.test(cpus) && Number(cpus) > 0)
+      out.cpus = Number.isInteger(Number(cpus)) && Number(cpus) >= 1 ? Number(cpus) : cpus;
+    else if (limits.cpus !== undefined) dropped.push("deploy.resources.limits.cpus");
+    if (typeof limits.memory === "string" && /^[0-9]+([bBkKmMgG][bB]?)?$/.test(limits.memory))
+      out.memory = limits.memory;
+    else if (limits.memory !== undefined) dropped.push("deploy.resources.limits.memory");
+    const other = [
+      ...Object.keys(deploy)
+        .filter((k) => k !== "resources")
+        .map((k) => `deploy.${k}`),
+      ...Object.keys(resources)
+        .filter((k) => k !== "limits")
+        .map((k) => `deploy.resources.${k}`),
+    ];
+    dropped.push(...other);
+  }
+  return { ...out, dropped };
+}
+
 function healthPathOf(healthcheck: unknown): string | undefined {
   if (!isObj(healthcheck) || !Array.isArray(healthcheck.test)) return undefined;
   const test = healthcheck.test
@@ -420,10 +489,11 @@ registerDetector({
         });
         continue;
       }
-      if (raw.profiles !== undefined) {
+      const profiles = profilesOf(raw.profiles);
+      if (raw.profiles !== undefined && !profiles) {
         skips.push({
           ...base,
-          reason: `service "${name}" has profiles ${JSON.stringify(raw.profiles)}; profiles are not enforced by Flisk`,
+          reason: `service "${name}" has profiles ${JSON.stringify(raw.profiles)} that Flisk cannot name (lowercase letters, digits and '-'); not imported`,
         });
         continue;
       }
@@ -509,7 +579,23 @@ registerDetector({
           reason: `service "${name}" health path "${foundHealthPath}" has characters Flisk does not accept (only a-z, 0-9, / and -); not used`,
         });
       }
-      const { container, dropped } = containerOf(raw);
+      const { container: options, dropped } = containerOf(raw);
+      const limits = runtimeLimitsOf(raw);
+      const { dropped: limitsDropped, ...limitValues } = limits;
+      const container =
+        options || Object.keys(limitValues).length
+          ? { ...(options ?? {}), ...limitValues }
+          : undefined;
+      for (const key of limitsDropped) {
+        skips.push({ ...base, reason: `service "${name}" ${key} is not carried over; not used` });
+      }
+      const envFile = envFilesOf(raw.env_file, composeDir);
+      if (raw.env_file !== undefined && !envFile) {
+        skips.push({
+          ...base,
+          reason: `service "${name}" env_file ${JSON.stringify(raw.env_file)} is outside the imported directory or uses Compose variables; not used`,
+        });
+      }
       for (const key of dropped) {
         skips.push({
           ...base,
@@ -590,6 +676,8 @@ registerDetector({
         ...(containerCommand ? { containerCommand } : {}),
         ...(containerEntrypoint ? { containerEntrypoint } : {}),
         ...(models ? { models } : {}),
+        ...(profiles ? { profiles } : {}),
+        ...(envFile ? { envFile } : {}),
         ...(healthProbe ? { healthCheck: healthProbe } : {}),
         ...(selectedPort !== undefined ? { port: selectedPort } : {}),
         ...(healthCheckPath ? { healthCheckPath } : {}),
