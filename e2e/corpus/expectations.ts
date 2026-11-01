@@ -55,7 +55,7 @@ export const EXPECTATIONS: Record<string, Expectation> = {
         {
           match: {
             port: 80,
-            dependsOn: ["db"],
+            dependsOn: [{ name: "db" }],
             volumes: [{ source: "wp", target: "/var/www/html" }],
           },
         },
@@ -67,7 +67,7 @@ export const EXPECTATIONS: Record<string, Expectation> = {
   },
   "gitea-postgres": {
     services: {
-      gitea: svc({ match: { port: 3000, dependsOn: ["db"] } }, routed),
+      gitea: svc({ match: { port: 3000, dependsOn: [{ name: "db" }] } }, routed),
       db: privateSvc,
     },
     plan: ["publishes extra container ports (22)"],
@@ -78,7 +78,13 @@ export const EXPECTATIONS: Record<string, Expectation> = {
   "rails-sidekiq": {
     services: {
       web: svc(
-        { match: { buildContext: "../../..", port: 3000, dependsOn: ["db", "redis"] } },
+        {
+          match: {
+            buildContext: "../../..",
+            port: 3000,
+            dependsOn: [{ name: "db" }, { name: "redis" }],
+          },
+        },
         routed,
       ),
       sidekiq: svc({ match: { buildContext: "../../.." } }, privateSvc),
@@ -90,7 +96,7 @@ export const EXPECTATIONS: Record<string, Expectation> = {
   "django-celery": {
     services: {
       web: svc({ match: { port: 8000, buildContext: "../../../backend" } }, routed),
-      worker: svc({ match: { dependsOn: ["db"] } }, privateSvc),
+      worker: svc({ match: { dependsOn: [{ name: "db" }] } }, privateSvc),
       db: privateSvc,
     },
     plan: ["port:      8000"],
@@ -98,7 +104,7 @@ export const EXPECTATIONS: Record<string, Expectation> = {
   "spring-boot-mysql": {
     services: {
       app: svc(
-        { match: { port: 8080, healthCheckPath: "/actuator/health", dependsOn: ["db"] } },
+        { match: { port: 8080, healthCheckPath: "/actuator/health", dependsOn: [{ name: "db" }] } },
         routed,
       ),
       db: svc({ match: { port: 3306 } }, privateSvc),
@@ -106,7 +112,7 @@ export const EXPECTATIONS: Record<string, Expectation> = {
   },
   "interpolated-image": {
     services: {
-      api: { match: { dependsOn: ["db"] } },
+      api: { match: { dependsOn: [{ name: "db" }] } },
       db: svc({ match: { image: "postgres:${PG_VERSION:-16}" } }, privateSvc),
     },
     plan: ["image:     postgres:${PG_VERSION:-16}"],
@@ -134,7 +140,7 @@ export const EXPECTATIONS: Record<string, Expectation> = {
               LOG_VIEWER_CACHE_DRIVER: "file",
               VISION_FACE_STORAGE_BACKEND: "sqlite",
             },
-            dependsOn: ["lychee-db"],
+            dependsOn: [{ name: "lychee-db" }],
           },
           without: ["secrets"],
         },
@@ -156,7 +162,7 @@ export const EXPECTATIONS: Record<string, Expectation> = {
         {
           match: {
             env: { LYCHEE_MODE: "worker", DB_HOST: "lychee_db" },
-            dependsOn: ["lychee-api"],
+            dependsOn: [{ name: "lychee-api" }],
           },
         },
         privateSvc,
@@ -232,14 +238,14 @@ export const EXPECTATIONS: Record<string, Expectation> = {
   "kafka-zookeeper": {
     services: {
       zookeeper: svc({ match: { port: 2181 } }, privateSvc),
-      kafka: svc({ match: { port: 9092, dependsOn: ["zookeeper"] } }, privateSvc),
-      kafdrop: svc({ match: { port: 9000, dependsOn: ["kafka"] } }, routed),
+      kafka: svc({ match: { port: 9092, dependsOn: [{ name: "zookeeper" }] } }, privateSvc),
+      kafdrop: svc({ match: { port: 9000, dependsOn: [{ name: "kafka" }] } }, routed),
     },
   },
   "mongo-express": {
     services: {
       mongo: privateSvc,
-      express: svc({ match: { port: 8081, dependsOn: ["mongo"] } }, routed),
+      express: svc({ match: { port: 8081, dependsOn: [{ name: "mongo" }] } }, routed),
     },
   },
   "missing-dependency": {

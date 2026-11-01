@@ -90,9 +90,16 @@ function looksSecret(value: string): boolean {
  * `ARG` lines for the Compose variables in an image, so `FROM postgres:${POSTGRES_VERSION:-18}-alpine` can use them:
  * Docker substitutes only build arguments declared before FROM. The default is the expression's.
  */
+function imageArgExpressions(image: string): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const m of image.matchAll(/\$\{([A-Za-z_][A-Za-z0-9_]*)[^}]*\}/g))
+    out[m[1] as string] ??= m[0];
+  return out;
+}
+
 function buildArgLines(image: string): string {
   const args = new Map<string, string | undefined>();
-  for (const m of image.matchAll(/\$\{([A-Za-z_][A-Za-z0-9_]*)(?::?-([^}]*))?\}/g))
+  for (const m of image.matchAll(/\$\{([A-Za-z_][A-Za-z0-9_]*)(?::?-([^}]*)|:?\?[^}]*)?\}/g))
     if (!args.has(m[1] as string)) args.set(m[1] as string, m[2]);
   return [...args]
     .map(([name, value]) => (value === undefined ? `ARG ${name}\n` : `ARG ${name}=${value}\n`))
@@ -241,7 +248,13 @@ export function planWrites(plan: ImportPlan, force: boolean): WritePlan {
     }
     if (status !== "exists") used.set(path, port);
 
-    const dependsOn = service.dependsOn.filter((d) => d !== service.name && names.has(d));
+    // A Compose condition is kept as a { name, condition } entry (Flisk 1.4.28); a plain dependency stays a name.
+    const dependsOn = service.dependsOn
+      .filter((d) => d !== service.name && names.has(d))
+      .map((d) => {
+        const condition = service.dependsOnConditions[d];
+        return condition ? { name: d, condition } : d;
+      });
     const dropped = service.dependsOn.filter((d) => d !== service.name && !names.has(d));
     if (dropped.length)
       notes.push(`dependsOn not written, not in this import: ${dropped.join(", ")}`);
@@ -322,6 +335,21 @@ export function planWrites(plan: ImportPlan, force: boolean): WritePlan {
     // Omit `image` from service.json so Flisk builds from the Dockerfile instead of pulling the tag.
     // Flisk has no container `command`, so a Compose `command` on an image becomes the CMD of a one-line Dockerfile.
     const files: WriteItem["files"] = [];
+    // Build arguments: Compose build.args for a Dockerfile build, and, for a generated Dockerfile on an image with
+    // variables, each variable with its own expression, so the project's .env reaches `ARG NAME` before FROM.
+    const imageArgs =
+      !service.dockerfile &&
+      service.image &&
+      (service.containerCommand || service.containerEntrypoint)
+        ? imageArgExpressions(service.image)
+        : {};
+    const buildArgsAll = {
+      ...(service.dockerfile ? (service.buildArgs ?? {}) : {}),
+      ...imageArgs,
+    };
+    const buildArgs = Object.keys(buildArgsAll).length ? buildArgsAll : undefined;
+    if (service.buildArgs && !service.dockerfile)
+      notes.push("build.args not written: the service has no build of its own");
     const wrapWithCommand =
       !service.dockerfile &&
       service.image &&
@@ -417,7 +445,16 @@ export function planWrites(plan: ImportPlan, force: boolean): WritePlan {
         return [];
       }
       const rel = relative(serviceDir, absolute).split("\\").join("/") || ".";
-      return [{ ...volume, source: rel.startsWith(".") ? rel : `./${rel}` }];
+      const path = rel.startsWith(".") ? rel : `./${rel}`;
+      // `${NAME:-./path}` keeps reading NAME; its default is made relative to the service directory.
+      const source = volume.fromEnv
+        ? `\${${volume.fromEnv.name}${volume.fromEnv.op}${path}}`
+        : path;
+      if (volume.fromEnv)
+        notes.push(
+          `volume ${volume.target} reads its path from ${volume.fromEnv.name}; the default is written relative to this service.json`,
+        );
+      return [{ ...volume, source }];
     });
     // env_file paths are relative to the service directory in service.json, and must stay inside the project.
     // With the project .env tracked by git, secrets live in another local file, which Flisk then reads as envFile.
@@ -446,6 +483,8 @@ export function planWrites(plan: ImportPlan, force: boolean): WritePlan {
       ...source,
       ...(isPrivate ? { exposeViaProxy: false } : {}),
       ...(dependsOn.length ? { dependsOn } : {}),
+      ...(buildArgs ? { buildArgs } : {}),
+      ...(service.logging ? { logging: service.logging } : {}),
       ...(Object.keys(env).length
         ? { env: Object.fromEntries(Object.entries(env).sort(([a], [b]) => a.localeCompare(b))) }
         : {}),
@@ -462,10 +501,11 @@ export function planWrites(plan: ImportPlan, force: boolean): WritePlan {
       ...(volumes.length
         ? {
             // `name` keeps the Docker volume the Compose install already has, so its data is used with no copy.
-            volumes: volumes.map(({ source, target, readOnly, name }) => ({
+            volumes: volumes.map(({ source, target, readOnly, name, selinux }) => ({
               source,
               target,
               ...(readOnly ? { readOnly } : {}),
+              ...(selinux ? { selinux } : {}),
               ...(name ? { name } : {}),
             })),
           }

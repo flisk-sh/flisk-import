@@ -10,7 +10,7 @@ export const SERVICE_MANIFEST_SCHEMA_URL = "https://flisk.sh/schema.service.json
  * release after 1.4.10 (flisk#2646) accepts a bring-your-own port outside 4000-5999 and two-letter
  * names, which this importer now writes. Stated, not checked: it does not read the installed version.
  */
-export const MIN_CORE_VERSION = "1.4.26";
+export const MIN_CORE_VERSION = "1.4.28";
 /**
  * The core change that runs a registered Tiltfile (`orchestration.source: "tiltfile"`) from `flisk up`. Stated, not
  * checked, like MIN_CORE_VERSION.
@@ -29,7 +29,7 @@ export const HEALTH_CHECK_PATH_PATTERN = /^\/[a-z0-9/-]*$/;
  * Compose resolves them from the project .env. Nothing else: no quotes, spaces or newlines that could change generated YAML.
  */
 export const IMAGE_PATTERN =
-  /^(?:[A-Za-z0-9._/:@-]|\$\{[A-Za-z_][A-Za-z0-9_]*(?::?-[A-Za-z0-9._/:@-]+)?\})+$/;
+  /^(?:[A-Za-z0-9._/:@-]|\$\{[A-Za-z_][A-Za-z0-9_]*(?::?-[A-Za-z0-9._/:@-]+|:?\?[A-Za-z0-9 !#%&()*+,./:;<=>?@[\]^_|~-]*)?\})+$/;
 
 /** A DNS name for a network alias: letters, digits, '-', '_' and '.'. */
 export const NETWORK_ALIAS = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,252}$/;

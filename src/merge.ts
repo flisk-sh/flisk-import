@@ -44,6 +44,10 @@ export interface MergedService {
   env: Record<string, string>;
   envRefs: Record<string, string>;
   dependsOn: string[];
+  /** Compose conditions by resource name. */
+  dependsOnConditions: Record<string, import("./types.js").DependsOnCondition>;
+  buildArgs?: Record<string, string>;
+  logging?: Candidate["logging"];
   container?: ContainerOptions;
   extraPorts?: ExtraPort[];
   /** Resource name of the service whose network this one shares. */
@@ -122,7 +126,9 @@ function firstOf<
     | "healthCheck"
     | "models"
     | "profiles"
-    | "envFile",
+    | "envFile"
+    | "buildArgs"
+    | "logging",
 >(ordered: Candidate[], key: K): Partial<Pick<Candidate, K>> {
   const holder = ordered.find((c) => c[key] !== undefined);
   return holder ? ({ [key]: holder[key] } as Partial<Pick<Candidate, K>>) : {};
@@ -156,6 +162,15 @@ function mergeGroup(
     ...firstOf(ordered, "models"),
     ...firstOf(ordered, "profiles"),
     ...firstOf(ordered, "envFile"),
+    ...firstOf(ordered, "buildArgs"),
+    ...firstOf(ordered, "logging"),
+    dependsOnConditions: Object.fromEntries(
+      [...ordered]
+        .reverse()
+        .flatMap((c) =>
+          Object.entries(c.dependsOnConditions ?? {}).map(([d, v]) => [resolve(d), v]),
+        ),
+    ),
     ...firstOf(ordered, "healthCheck"),
     ...(ordered.find((c) => c.sidecarOf)?.sidecarOf
       ? { sidecarOf: resolve(ordered.find((c) => c.sidecarOf)?.sidecarOf as string) }

@@ -53,6 +53,12 @@ export interface Candidate {
   /** Values that are only Compose interpolation (`${VAR}`, `${VAR:-default}`), kept as written for service.json `env`. */
   envRefs?: Record<string, string>;
   dependsOn?: string[];
+  /** Compose depends_on conditions by raw dependency name, when Compose states one (flisk 1.4.28 dependsOn objects). */
+  dependsOnConditions?: Record<string, DependsOnCondition>;
+  /** Compose build.args, NAME to a string that may use Compose variables (flisk 1.4.28 buildArgs). */
+  buildArgs?: Record<string, string>;
+  /** Compose logging (flisk 1.4.28 logging). */
+  logging?: { driver?: string; options?: Record<string, string> };
   /** Compose container options (cap_add, read_only, ...) as service.json `container` (Flisk 1.5, flisk#2907). */
   container?: ContainerOptions;
   /** Ports published next to the routed one, as service.json `extraPorts` (flisk#2909). */
@@ -66,6 +72,11 @@ export interface Candidate {
   confidence: Confidence;
   sources: Source[];
 }
+
+export type DependsOnCondition =
+  | "service_started"
+  | "service_healthy"
+  | "service_completed_successfully";
 
 export interface ModelRef {
   name: string;
@@ -123,6 +134,10 @@ export interface VolumeMount {
   bind: boolean;
   /** The Docker volume's own name as Compose created it (myapp_data), so Flisk keeps using the install's data. */
   name?: string;
+  /** A bind path from the environment, `${NAME:-./path}`: `source` is the default path, this is NAME and the operator. */
+  fromEnv?: { name: string; op: ":-" | "-" };
+  /** SELinux relabel option of a bind mount (Compose :z / :Z). */
+  selinux?: "z" | "Z";
 }
 
 export interface Skip {

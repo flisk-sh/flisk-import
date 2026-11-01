@@ -81,7 +81,7 @@ describe("root Compose import", () => {
       appType: "bring-your-own",
       port: 4000,
       healthCheckPath: "/health",
-      dependsOn: ["db"],
+      dependsOn: [{ name: "db", condition: "service_started" }],
       buildContext: "../../../api",
       dockerfile: "Dockerfile",
     });
@@ -247,7 +247,7 @@ describe("Compose values Flisk cannot take as they are", () => {
         "  db:",
         "    image: postgres:$PG_VERSION",
         "  cache:",
-        "    image: 'redis:${TAG:?set TAG}'",
+        "    image: 'redis:${TAG:?set \"TAG\"}'",
         "  web:",
         '    image: "nginx:1\\n  privileged: true"',
       ].join("\n"),
@@ -316,12 +316,12 @@ describe("Compose values Flisk cannot take as they are", () => {
         "  api:",
         "    image: example/api:1",
         "    command: npm run start:prod",
-        "    logging: { driver: json-file }",
+        "    pull_policy: always",
         "    volumes: ['./data:/data']",
       ].join("\n"),
     );
-    expect(text).toContain('service "api" keys not translated: logging');
-    expect(text).not.toContain("logging, volumes");
+    expect(text).toContain('service "api" keys not translated: pull_policy');
+    expect(text).not.toContain("pull_policy, volumes");
   });
 
   it("does not import a service whose build context is outside the directory", () => {
@@ -1551,7 +1551,7 @@ describe("include and extends, resolved through docker compose config (wger)", (
       ]);
       expect(manifest("web")).toMatchObject({
         image: "docker.io/wger/server:latest",
-        dependsOn: ["db"],
+        dependsOn: [{ name: "db", condition: "service_started" }],
         container: { stopGracePeriod: "60s" },
       });
     },
@@ -1592,14 +1592,17 @@ describe("include and extends, resolved through docker compose config (wger)", (
       expect(manifest("cache").image).toBe("docker.io/redis:7");
       expect(manifest("powersync")).toMatchObject({
         image: "docker.io/journeyapps/powersync-service:latest",
-        dependsOn: ["db"],
+        dependsOn: [{ name: "db", condition: "service_healthy" }],
         volumes: [{ source: "../../config-powersync", target: "/config", readOnly: true }],
       });
       expect(manifest("nginx").volumes).toEqual([
         { source: "../../../config/nginx.conf", target: "/etc/nginx/conf.d/default.conf" },
       ]);
       expect(manifest("nginx").extraPorts).toEqual([{ port: 80, bind: "0.0.0.0" }]);
-      expect(manifest("web").dependsOn).toEqual(["cache", "db"]);
+      expect(manifest("web").dependsOn).toEqual([
+        { name: "cache", condition: "service_healthy" },
+        { name: "db", condition: "service_healthy" },
+      ]);
       // extends: the worker gets the cache image and its own command.
       expect(readFileSync(join(dirname(serviceJson("worker")), "Dockerfile"), "utf8")).toContain(
         'FROM docker.io/redis:7\nCMD ["redis-server","--port","6380"]\n',
@@ -1613,4 +1616,151 @@ describe("include and extends, resolved through docker compose config (wger)", (
       }
     },
   );
+});
+
+describe("Flisk 1.4.28 fields: dependsOn conditions, buildArgs, logging, env bind paths, SELinux labels, ${NAME:?message}", () => {
+  function imported(files: Record<string, string>) {
+    tree(files);
+    const plan = buildPlan(root);
+    const writes = planWrites(plan, false);
+    applyWrites(writes);
+    return {
+      text: formatPlan(plan, writes),
+      writes,
+      manifest: (name: string) => JSON.parse(readFileSync(serviceJson(name), "utf8")),
+    };
+  }
+
+  it("writes each Compose condition as a { name, condition } entry, a list entry as service_started", () => {
+    const { manifest } = imported({
+      "docker-compose.yml": [
+        "services:",
+        "  web:",
+        "    image: app:1",
+        "    depends_on:",
+        "      db: { condition: service_healthy }",
+        "      migrate: { condition: service_completed_successfully }",
+        "      cache: {}",
+        "  proxy:",
+        "    image: caddy:2",
+        "    depends_on: [web]",
+        "  db: { image: 'postgres:16' }",
+        "  migrate: { image: 'app:1', restart: 'no' }",
+        "  cache: { image: 'redis:7' }",
+      ].join("\n"),
+    });
+    expect(manifest("web").dependsOn).toEqual([
+      { name: "cache", condition: "service_started" },
+      { name: "db", condition: "service_healthy" },
+      { name: "migrate", condition: "service_completed_successfully" },
+    ]);
+    expect(manifest("proxy").dependsOn).toEqual([{ name: "web", condition: "service_started" }]);
+  });
+
+  it("keeps build.args, and passes an image variable to the generated Dockerfile's ARG (pl_mail database)", () => {
+    const { manifest, text } = imported({
+      "docker-compose.yml": [
+        "services:",
+        "  api:",
+        "    build:",
+        "      context: ./api",
+        "      args: { NODE_VERSION: '${NODE_VERSION:-22}', MODE: production }",
+        "  worker:",
+        "    build:",
+        "      context: ./api",
+        "      args: ['NODE_VERSION=20', 'EMPTY=']",
+        "  database:",
+        "    image: postgres:${POSTGRES_VERSION:-18}-alpine",
+        "    command: postgres -c max_connections=200",
+        "  bad:",
+        "    build: { context: ./api, args: { 'not ok': x } }",
+      ].join("\n"),
+      "api/Dockerfile": "FROM node\n",
+    });
+    expect(manifest("api").buildArgs).toEqual({
+      NODE_VERSION: "${NODE_VERSION:-22}",
+      MODE: "production",
+    });
+    expect(manifest("worker").buildArgs).toEqual({ NODE_VERSION: "20", EMPTY: "" });
+    expect(manifest("database").buildArgs).toEqual({ POSTGRES_VERSION: "${POSTGRES_VERSION:-18}" });
+    expect(manifest("bad")).not.toHaveProperty("buildArgs");
+    expect(text).toContain(
+      'service "bad" build.args {"not ok":"x"} has names or values Flisk does not accept',
+    );
+  });
+
+  it("keeps wger's logging with string options", () => {
+    const { manifest, text } = imported({
+      "docker-compose.yml": [
+        "services:",
+        "  web:",
+        "    image: docker.io/wger/server:latest",
+        "    logging: { driver: json-file, options: { max-size: 10m, max-file: 3 } }",
+        "  bad:",
+        "    image: app:1",
+        "    logging: { driver: 'json file' }",
+      ].join("\n"),
+    });
+    expect(manifest("web").logging).toEqual({
+      driver: "json-file",
+      options: { "max-size": "10m", "max-file": "3" },
+    });
+    expect(manifest("bad")).not.toHaveProperty("logging");
+    expect(text).toContain(
+      'service "bad" logging {"driver":"json file"} has a driver or options Flisk does not accept',
+    );
+    expect(text).not.toContain("keys not translated: logging");
+  });
+
+  it("keeps open-mercato's ${VAR:-./path} bind sources and any-sync's :z / :Z labels", () => {
+    const { manifest, text } = imported({
+      "docker-compose.yml": [
+        "services:",
+        "  opencode:",
+        "    image: opencode:1",
+        "    volumes:",
+        "      - ${OM_AGENTS_DIR:-./agents}:/agents:ro",
+        "      - ${OM_CERTS-./certs}:/certs",
+        "      - ./etc:/etc/any-sync:z",
+        "      - ./data:/data:ro,Z",
+        "      - type: bind",
+        "        source: ./long",
+        "        target: /long",
+        "        bind: { selinux: z }",
+        "      - ${OUTSIDE:-../../elsewhere}:/x",
+      ].join("\n"),
+    });
+    expect(manifest("opencode").volumes).toEqual([
+      { source: "${OM_AGENTS_DIR:-../../../agents}", target: "/agents", readOnly: true },
+      { source: "${OM_CERTS-../../../certs}", target: "/certs" },
+      { source: "../../../etc", target: "/etc/any-sync", selinux: "z" },
+      { source: "../../../data", target: "/data", readOnly: true, selinux: "Z" },
+      { source: "../../../long", target: "/long", selinux: "z" },
+    ]);
+    expect(text).toContain("volume /agents reads its path from OM_AGENTS_DIR");
+    expect(text).toContain('volume "${OUTSIDE:-../../elsewhere}:/x" is not translated');
+  });
+
+  it("writes any-sync's ${NAME:?message} image as it is, with a plain ARG in a generated Dockerfile", () => {
+    const { manifest, writes } = imported({
+      "docker-compose.yml": [
+        "services:",
+        "  garage:",
+        "    image: 'dxflrs/garage:${GARAGE_VERSION:?set GARAGE_VERSION in .env}'",
+        "  wrapped:",
+        "    image: 'dxflrs/garage:${GARAGE_VERSION:?set GARAGE_VERSION in .env}'",
+        "    command: server",
+      ].join("\n"),
+    });
+    expect(writes.rejected).toEqual([]);
+    expect(manifest("garage").image).toBe(
+      "dxflrs/garage:${GARAGE_VERSION:?set GARAGE_VERSION in .env}",
+    );
+    expect(readFileSync(join(dirname(serviceJson("wrapped")), "Dockerfile"), "utf8")).toContain(
+      "ARG GARAGE_VERSION\nFROM dxflrs/garage:${GARAGE_VERSION:?set GARAGE_VERSION in .env}\n",
+    );
+    expect(manifest("wrapped").buildArgs).toEqual({
+      GARAGE_VERSION: "${GARAGE_VERSION:?set GARAGE_VERSION in .env}",
+    });
+  });
 });
