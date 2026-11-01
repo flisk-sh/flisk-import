@@ -274,6 +274,12 @@ function hostSideOf(port: number, hostIp: string | undefined, hostPort: string |
   return /^\d{1,3}(\.\d{1,3}){3}:\d+$/.test(publish) ? { publish } : undefined;
 }
 
+/** Whether a `ports:` entry names a host port ("8000:8000", "127.0.0.1:8000:8000", `published:`), not only a container port. */
+function hasHostSide(entry: unknown): boolean {
+  if (isObj(entry)) return entry.published !== undefined;
+  return typeof entry === "string" && (entry.split("/")[0] ?? "").includes(":");
+}
+
 function publishedPort(entry: unknown): ExtraPort | undefined {
   const port = containerPort(entry);
   if (port === undefined) return undefined;
@@ -396,8 +402,41 @@ function envValues(environment: unknown): Record<string, string> {
   return out;
 }
 
-/** A value that is nothing but Compose interpolation, such as `${URL}` or `${PORT:-80}`. Holds no secret itself. */
-const ONLY_REFERENCES = /^(\$\{[A-Za-z_][A-Za-z0-9_]*(?::?[-?+][^}\n]*)?\})+$/;
+/** The end of the `${...}` expression that starts at `start`, nested defaults included; undefined when it is not one. */
+function expressionEnd(text: string, start: number): number | undefined {
+  if (!text.startsWith("${", start)) return undefined;
+  const name = /^[A-Za-z_][A-Za-z0-9_]*/.exec(text.slice(start + 2));
+  if (!name) return undefined;
+  let i = start + 2 + name[0].length;
+  if (text[i] === "}") return i + 1;
+  const op = /^:?[-?+]/.exec(text.slice(i));
+  if (!op) return undefined;
+  i += op[0].length;
+  while (i < text.length) {
+    if (text.startsWith("${", i)) {
+      const end = expressionEnd(text, i);
+      if (end === undefined) return undefined;
+      i = end;
+    } else if (text[i] === "}") return i + 1;
+    else if (text[i] === "\n" || text[i] === "$") return undefined;
+    else i++;
+  }
+  return undefined;
+}
+
+/**
+ * A value that is nothing but Compose interpolation: `${URL}`, `${PORT:-80}`, `${PORT-80}`, nested `${A:-${B:-file}}`.
+ * It holds no secret itself (a default is what the project's Compose file already commits), so it stays in `env`.
+ */
+export function isComposeExpression(value: string): boolean {
+  let i = 0;
+  while (i < value.length) {
+    const end = expressionEnd(value, i);
+    if (end === undefined) return false;
+    i = end;
+  }
+  return value.length > 0;
+}
 
 /** Values that are only `${VAR}` references, which service.json `env` can keep as they are (Flisk 1.4.24). */
 function envReferences(environment: unknown): Record<string, string> {
@@ -410,7 +449,7 @@ function envReferences(environment: unknown): Record<string, string> {
       : [];
   const out: Record<string, string> = {};
   for (const [key, raw] of pairs) {
-    if (typeof raw === "string" && ONLY_REFERENCES.test(raw)) out[key] = raw;
+    if (typeof raw === "string" && isComposeExpression(raw)) out[key] = raw;
   }
   return out;
 }
@@ -490,12 +529,18 @@ function containerCommandOf(command: unknown): { argv: string[]; shell?: string 
   return undefined;
 }
 
-/** Seconds from a Compose duration such as `30s` or `2m`; undefined for anything it cannot read exactly. */
+const DURATION_UNIT: Record<string, number> = { h: 3600, m: 60, s: 1, ms: 0.001, us: 0.000001 };
+
+/** Seconds from a Compose duration such as `30s`, `2m` or `1m30s`; undefined for anything it cannot read exactly. */
 function secondsOf(value: unknown): number | undefined {
   if (typeof value === "number" && value > 0) return value;
-  const match = typeof value === "string" ? value.match(/^(\d+)(s|m)?$/) : null;
-  if (!match) return undefined;
-  const seconds = Number(match[1]) * (match[2] === "m" ? 60 : 1);
+  if (typeof value !== "string") return undefined;
+  if (/^\d+$/.test(value)) return Number(value) > 0 ? Number(value) : undefined;
+  if (!DURATION.test(value)) return undefined;
+  let seconds = 0;
+  for (const [, amount, unit] of value.matchAll(/([0-9]+(?:\.[0-9]+)?)(h|ms|us|m|s)/g))
+    seconds += Number(amount) * (DURATION_UNIT[unit as string] as number);
+  seconds = Math.round(seconds * 1000) / 1000;
   return seconds > 0 ? seconds : undefined;
 }
 
@@ -513,6 +558,7 @@ function healthProbeOf(healthcheck: unknown): HealthCheckProbe | undefined {
   if (!command) return undefined;
   const interval = secondsOf(healthcheck.interval);
   const timeout = secondsOf(healthcheck.timeout);
+  const startPeriod = secondsOf(healthcheck.start_period);
   const retries =
     typeof healthcheck.retries === "number" &&
     Number.isInteger(healthcheck.retries) &&
@@ -524,6 +570,7 @@ function healthProbeOf(healthcheck: unknown): HealthCheckProbe | undefined {
     ...(interval ? { interval } : {}),
     ...(timeout ? { timeout } : {}),
     ...(retries ? { retries } : {}),
+    ...(startPeriod ? { startPeriod } : {}),
   };
 }
 
@@ -809,11 +856,14 @@ registerDetector({
           reason: `service "${name}" ${key} ${JSON.stringify(raw[key])} has values Flisk does not accept; not used`,
         });
       }
-      // Every published port Flisk does not route stays published on the same host address (service.json extraPorts).
+      // Every published port stays published on the same host address (service.json extraPorts). The routed port too,
+      // when Compose gives it a host side ("${APP_PORT:-8000}:8000"), so the app is still reachable without Traefik
+      // (and in an exported docker-compose.yml); a bare routed "8000" is reached through Traefik only.
       const proxied = selectedPort !== undefined && !NON_HTTP_PORTS.has(selectedPort);
       const extraPorts = (Array.isArray(raw.ports) ? raw.ports : [])
+        .filter((entry) => containerPort(entry) !== selectedPort || !proxied || hasHostSide(entry))
         .map(publishedPort)
-        .filter((p): p is ExtraPort => p !== undefined && (p.port !== selectedPort || !proxied));
+        .filter((p): p is ExtraPort => p !== undefined);
       let sidecarOf: string | undefined;
       if (raw.network_mode !== undefined) {
         const mode = typeof raw.network_mode === "string" ? raw.network_mode : "";

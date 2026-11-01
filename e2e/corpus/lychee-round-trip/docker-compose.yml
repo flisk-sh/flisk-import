@@ -1,0 +1,42 @@
+# In the shape of LycheeOrg/Lychee: snake_case names called by name, a published routed port with a variable host
+# side, a curl healthcheck others wait on, start_period, and env with ${X:-default} and literal settings.
+x-env: &env
+  DB_HOST: lychee_db
+  DB_PASSWORD: "${DB_PASSWORD:-password}"
+  APP_URL: "${APP_URL:-http://localhost:${APP_PORT:-8000}}"
+  LOG_VIEWER_CACHE_DRIVER: file
+  VISION_FACE_STORAGE_BACKEND: sqlite
+services:
+  lychee_db:
+    image: mariadb:${MARIADB_VERSION:-11}
+    environment:
+      MYSQL_ROOT_PASSWORD: "${DB_ROOT_PASSWORD:-rootpassword}"
+      MYSQL_PASSWORD: s3cr3t-literal
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+  lychee_api:
+    image: ghcr.io/lycheeorg/lychee:latest
+    ports: ["${APP_PORT:-8000}:8000"]
+    environment:
+      <<: *env
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/up"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 1m
+    depends_on:
+      lychee_db:
+        condition: service_healthy
+  lychee_worker:
+    image: ghcr.io/lycheeorg/lychee:latest
+    environment:
+      <<: *env
+      LYCHEE_MODE: worker
+    depends_on:
+      lychee_api:
+        condition: service_healthy

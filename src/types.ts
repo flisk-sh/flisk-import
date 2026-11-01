@@ -78,6 +78,8 @@ export interface HealthCheckProbe {
   interval?: number;
   timeout?: number;
   retries?: number;
+  /** Seconds before failed probes count (Compose start_period). */
+  startPeriod?: number;
 }
 
 export interface ContainerOptions {

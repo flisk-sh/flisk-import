@@ -46,25 +46,24 @@ const CREDENTIAL_NAME =
   /PASS|SECRET|TOKEN|KEY|PRIVATE|CREDENTIAL|AUTH|HMAC|SALT|CERT|SESSION|COOKIE/i;
 
 /**
- * Whether a literal Compose value cannot be a secret, so it may be committed in service.json `env`: a number, true or false,
- * or the address of another service in this import (a URL or host:port with no user, password, query or fragment).
+ * Whether a literal value may hold a credential although its name does not say so: a URL or `user:pass@host` with a
+ * user or password, a query parameter named like a credential, a PEM block, a long random-looking token, or a value
+ * that says it is one (SECRET, TOKEN, PASSWORD).
  */
-function isPlainValue(value: string, serviceHosts: Set<string>): boolean {
-  if (/^-?\d+(\.\d+)?$/.test(value) || /^(true|false)$/i.test(value)) return true;
-  const hostPort = value.match(/^([a-z0-9][a-z0-9._-]*):(\d{1,5})$/);
-  if (hostPort) return serviceHosts.has(hostPort[1] as string);
+function looksSecret(value: string): boolean {
+  if (/^[^\s:@/]+:[^\s@/]+@/.test(value) || value.includes("-----BEGIN")) return true;
+  if (/SECRET|TOKEN|PASSWORD|PASSWD/i.test(value)) return true;
+  if (/^[A-Za-z0-9+/_=.-]{32,}$/.test(value) && /[0-9]/.test(value) && /[A-Za-z]/.test(value))
+    return true;
+  if (!value.includes("://")) return false;
   try {
     const url = new URL(value);
     return (
-      serviceHosts.has(url.hostname) &&
-      !url.username &&
-      !url.password &&
-      !url.search &&
-      !url.hash &&
-      /^[A-Za-z0-9._~/-]*$/.test(url.pathname)
+      Boolean(url.username || url.password) ||
+      [...url.searchParams.keys()].some((key) => CREDENTIAL_NAME.test(key))
     );
   } catch {
-    return false;
+    return /:\/\/[^/\s]*@/.test(value);
   }
 }
 
@@ -149,10 +148,6 @@ export function planWrites(plan: ImportPlan, force: boolean): WritePlan {
     return !reason;
   });
   const names = new Set(accepted.map((s) => s.name));
-  // Hostnames other services use for these: the resource name, which stays the container hostname, and the Compose name.
-  const serviceHosts = new Set(
-    plan.services.flatMap((s) => (s.originalName ? [s.name, s.originalName] : [s.name])),
-  );
 
   for (const service of accepted) {
     const path = resolve(servicesDir, stack, service.name, "service.json");
@@ -213,21 +208,25 @@ export function planWrites(plan: ImportPlan, force: boolean): WritePlan {
       notes.push(
         "health path / is assumed: no HTTP health path could be read from Compose. Traefik routes only while it answers 2xx or 3xx",
       );
-    // A probe command is the only way to describe a non-HTTP check; a routed service keeps its HTTP path.
-    const healthCheck =
-      service.healthCheck && !(healthCheckPath && service.healthCheckPath)
-        ? service.healthCheck
-        : undefined;
-    // Values that cannot be secrets (numbers, booleans, another service's address, pure ${VAR} references) go into the
-    // committed service.json `env` (Flisk 1.4.24). Every other name is a secret: Flisk injects it from the gitignored .env.
+    // The Compose healthcheck stays as healthCheck.command (with its interval, timeout, retries and start period) even
+    // when an HTTP path was read too, so an exported docker-compose.yml keeps it and `condition: service_healthy` holds.
+    const healthCheck = service.healthCheck;
+    if (healthCheck && healthCheckPath && service.healthCheckPath)
+      notes.push(
+        `healthCheck.command ${JSON.stringify(healthCheck.command)} is kept as Compose wrote it; Flisk probes with it instead of ${healthCheckPath}`,
+      );
+    // What goes into the committed service.json `env` (Flisk 1.4.24): a pure Compose expression (`${X}`, `${X:-default}`,
+    // `${A:-${B:-file}}`) as it is, whatever its name, since its default is already committed in the Compose file; and
+    // a literal whose name does not look like a credential and whose value does not hold one. Every other name is a
+    // secret: Flisk injects it from the gitignored .env, which gets the literal value.
     const validNames = service.envKeys.filter((key) => ENV_NAME.test(key));
     const env: Record<string, string> = {};
     for (const key of validNames) {
-      if (CREDENTIAL_NAME.test(key)) continue;
       const literal = service.env[key];
       const reference = service.envRefs[key];
-      if (literal !== undefined && isPlainValue(literal, serviceHosts)) env[key] = literal;
-      else if (literal === undefined && reference !== undefined) env[key] = reference;
+      if (literal === undefined && reference !== undefined) env[key] = reference;
+      else if (literal !== undefined && !CREDENTIAL_NAME.test(key) && !looksSecret(literal))
+        env[key] = literal;
     }
     const referenced = [
       ...new Set(

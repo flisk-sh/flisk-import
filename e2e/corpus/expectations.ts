@@ -111,6 +111,59 @@ export const EXPECTATIONS: Record<string, Expectation> = {
     },
     plan: ["image:     postgres:${PG_VERSION:-16}"],
   },
+  "lychee-round-trip": {
+    services: {
+      "lychee-api": svc(
+        {
+          match: {
+            port: 8000,
+            healthCheckPath: "/up",
+            healthCheck: {
+              command: ["curl", "-f", "http://localhost:8000/up"],
+              interval: 30,
+              timeout: 10,
+              retries: 3,
+              startPeriod: 60,
+            },
+            extraPorts: [{ port: 8000, publish: "${APP_PORT:-8000}" }],
+            container: { networkAliases: ["lychee_api"] },
+            env: {
+              APP_URL: "${APP_URL:-http://localhost:${APP_PORT:-8000}}",
+              DB_HOST: "lychee_db",
+              DB_PASSWORD: "${DB_PASSWORD:-password}",
+              LOG_VIEWER_CACHE_DRIVER: "file",
+              VISION_FACE_STORAGE_BACKEND: "sqlite",
+            },
+            dependsOn: ["lychee-db"],
+          },
+          without: ["secrets"],
+        },
+        routed,
+      ),
+      "lychee-db": svc(
+        {
+          match: {
+            image: "mariadb:${MARIADB_VERSION:-11}",
+            healthCheck: { command: ["healthcheck.sh", "--connect"], startPeriod: 30 },
+            env: { MYSQL_ROOT_PASSWORD: "${DB_ROOT_PASSWORD:-rootpassword}" },
+            secrets: { required: ["MYSQL_PASSWORD"] },
+            container: { networkAliases: ["lychee_db"] },
+          },
+        },
+        privateSvc,
+      ),
+      "lychee-worker": svc(
+        {
+          match: {
+            env: { LYCHEE_MODE: "worker", DB_HOST: "lychee_db" },
+            dependsOn: ["lychee-api"],
+          },
+        },
+        privateSvc,
+      ),
+    },
+    plan: ['renamed from "lychee_api"'],
+  },
   "interpolated-port": {
     services: { app: privateSvc },
     plan: ["ports not understood"],
