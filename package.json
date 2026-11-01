@@ -1,6 +1,6 @@
 {
   "name": "flisk-import",
-  "version": "0.14.0",
+  "version": "0.15.0",
   "description": "Import a repository's root docker-compose.yml into Flisk service.json files, or register its Tiltfile.",
   "type": "module",
   "license": "MIT",

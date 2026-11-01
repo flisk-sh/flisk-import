@@ -770,6 +770,17 @@ registerDetector({
     }
 
     const project = projectNameOf(root, absPath);
+    // Services another one waits for with `condition: service_completed_successfully`: one-shot jobs.
+    const awaitedJobs = new Set(
+      Object.values(services).flatMap((svc) =>
+        isObj(svc) && isObj(svc.depends_on)
+          ? Object.entries(svc.depends_on)
+              .filter(([, dep]) => isObj(dep) && dep.condition === "service_completed_successfully")
+              .map(([dep]) => dep)
+          : [],
+      ),
+    );
+    const restartedByFlisk: string[] = [];
     for (const [name, raw] of Object.entries(services)) {
       if (!isObj(raw)) {
         skips.push({ ...base, reason: `service "${name}" is not a map` });
@@ -1002,12 +1013,24 @@ registerDetector({
         ...(extraPorts.length ? { extraPorts } : {}),
         ...(sidecarOf ? { sidecarOf } : {}),
         ...(volumes.length ? { volumes } : {}),
-        // Compose restarts nothing unless asked; Flisk defaults to unless-stopped, so "no" is written.
-        ...(restart ? { restart } : raw.restart === undefined ? { restart: "no" as const } : {}),
+        // Flisk runs a bring-your-own service with restart "no" as a one-shot job and waits for it to exit, so "no" is
+        // written only when Compose says so or another service waits for this one to complete. Otherwise restart is
+        // left out (Flisk's unless-stopped).
+        ...(restart
+          ? { restart }
+          : raw.restart === undefined && awaitedJobs.has(name)
+            ? { restart: "no" as const }
+            : {}),
         confidence: "high",
         sources: [base],
       });
+      if (raw.restart === undefined && !awaitedJobs.has(name)) restartedByFlisk.push(name);
     }
+    if (restartedByFlisk.length)
+      skips.push({
+        ...base,
+        reason: `restart not set for ${restartedByFlisk.join(", ")}: Flisk restarts them (unless-stopped), where Compose would not restart them after a crash or a reboot`,
+      });
     return { candidates, skips };
   },
 });

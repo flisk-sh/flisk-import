@@ -29,7 +29,7 @@ export const HEALTH_CHECK_PATH_PATTERN = /^\/[a-z0-9/-]*$/;
  * Compose resolves them from the project .env. Nothing else: no quotes, spaces or newlines that could change generated YAML.
  */
 export const IMAGE_PATTERN =
-  /^(?:[A-Za-z0-9._/:@-]|\$\{[A-Za-z_][A-Za-z0-9_]*(?::?-[A-Za-z0-9._/:@-]*)?\})+$/;
+  /^(?:[A-Za-z0-9._/:@-]|\$\{[A-Za-z_][A-Za-z0-9_]*(?::?-[A-Za-z0-9._/:@-]+)?\})+$/;
 
 /** A DNS name for a network alias: letters, digits, '-', '_' and '.'. */
 export const NETWORK_ALIAS = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,252}$/;
