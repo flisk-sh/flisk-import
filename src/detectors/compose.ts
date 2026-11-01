@@ -120,28 +120,60 @@ function containerOf(raw: Obj): { container?: ContainerOptions; dropped: string[
 }
 
 /** One published port: container port, host port when Compose names a literal one, and protocol. */
+/** A `publish` value Flisk accepts: digits, dots, colons and `${NAME:-default}` with a port or IPv4 address:port default. */
+const PUBLISH = /^(?:[0-9.:]|\$\{[A-Za-z_][A-Za-z0-9_]*:-[0-9.:]+\})+$/;
+
+/** The host address and port of a published port. Compose publishes on every interface unless an address is given. */
+function hostSideOf(port: number, hostIp: string | undefined, hostPort: string | undefined) {
+  const hostNumber = hostPort && /^\d+$/.test(hostPort) ? Number.parseInt(hostPort, 10) : undefined;
+  const keepHostPort =
+    hostNumber !== undefined && hostNumber >= 1 && hostNumber <= 65535 && hostNumber !== port
+      ? { hostPort: hostNumber }
+      : {};
+  if (hostPort?.includes("${")) {
+    const publish = hostIp ? `${hostIp}:${hostPort}` : hostPort;
+    return PUBLISH.test(publish) ? { publish } : undefined;
+  }
+  if (hostIp === undefined || hostIp === "" || hostIp === "0.0.0.0") {
+    // A bare container port ("3000") gets a random host port from Compose; Flisk keeps it on 127.0.0.1.
+    return hostPort === undefined ? {} : { ...keepHostPort, bind: "0.0.0.0" as const };
+  }
+  if (hostIp === "127.0.0.1") return keepHostPort;
+  const publish = `${hostIp}:${hostNumber ?? port}`;
+  return /^\d{1,3}(\.\d{1,3}){3}:\d+$/.test(publish) ? { publish } : undefined;
+}
+
 function publishedPort(entry: unknown): ExtraPort | undefined {
   const port = containerPort(entry);
   if (port === undefined) return undefined;
-  let host: number | undefined;
   let protocol: "tcp" | "udp" = "tcp";
+  let hostSide: ReturnType<typeof hostSideOf>;
   if (isObj(entry)) {
-    const published =
-      typeof entry.published === "string" ? Number(entry.published) : entry.published;
-    if (typeof published === "number" && Number.isInteger(published)) host = published;
+    const published = entry.published === undefined ? undefined : String(entry.published);
+    const hostIp = typeof entry.host_ip === "string" ? entry.host_ip : undefined;
     if (entry.protocol === "udp") protocol = "udp";
+    hostSide = hostSideOf(port, hostIp, published);
   } else if (typeof entry === "string") {
     const [mapping, proto] = entry.split("/");
     if (proto === "udp") protocol = "udp";
-    const parts = (mapping ?? "").split(":");
-    const hostPart = parts.length >= 2 ? parts[parts.length - 2] : undefined;
-    if (hostPart && /^\d+$/.test(hostPart)) host = Number.parseInt(hostPart, 10);
+    // [HOST_IP:][HOST_PORT:]CONTAINER_PORT, where the host side may hold ${VAR:-default}, which has colons of its own.
+    const match = (mapping ?? "").match(/^(?:(.*):)?([^:]+)$/);
+    const host = match?.[1];
+    if (host === undefined) hostSide = hostSideOf(port, undefined, undefined);
+    else if (host.includes("${")) hostSide = hostSideOf(port, undefined, host);
+    else {
+      const at = host.lastIndexOf(":");
+      hostSide =
+        at === -1
+          ? hostSideOf(port, undefined, host)
+          : hostSideOf(port, host.slice(0, at), host.slice(at + 1));
+    }
+  } else {
+    hostSide = {};
   }
   return {
     port,
-    ...(host !== undefined && host >= 1 && host <= 65535 && host !== port
-      ? { hostPort: host }
-      : {}),
+    ...(hostSide ?? {}),
     ...(protocol === "udp" ? { protocol } : {}),
   };
 }
@@ -445,12 +477,12 @@ registerDetector({
       if (ports.length > 1 && selectedPort === undefined) {
         skips.push({
           ...base,
-          reason: `service "${name}" lists several ports (${ports.join(", ")}); no single HTTP container port could be identified, so none is routed (all are published on 127.0.0.1 as extraPorts)`,
+          reason: `service "${name}" lists several ports (${ports.join(", ")}); no single HTTP container port could be identified, so none is routed (all stay published, as extraPorts)`,
         });
       } else if (ports.length > 1) {
         skips.push({
           ...base,
-          reason: `service "${name}" publishes extra container ports (${ports.filter((port) => port !== selectedPort).join(", ")}); Flisk routes only ${selectedPort} and publishes the others on 127.0.0.1 as extraPorts`,
+          reason: `service "${name}" publishes extra container ports (${ports.filter((port) => port !== selectedPort).join(", ")}); Flisk routes only ${selectedPort} and keeps the others published as extraPorts`,
         });
       }
       const dependsOn = Array.isArray(raw.depends_on)
@@ -484,7 +516,7 @@ registerDetector({
           reason: `service "${name}" ${key} ${JSON.stringify(raw[key])} has values Flisk does not accept; not used`,
         });
       }
-      // Every published port Flisk does not route stays published, on 127.0.0.1 (service.json extraPorts).
+      // Every published port Flisk does not route stays published on the same host address (service.json extraPorts).
       const proxied = selectedPort !== undefined && !NON_HTTP_PORTS.has(selectedPort);
       const extraPorts = (Array.isArray(raw.ports) ? raw.ports : [])
         .map(publishedPort)

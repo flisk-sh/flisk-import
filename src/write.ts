@@ -12,6 +12,7 @@ import {
 } from "./flisk.js";
 import { type MergedService, toResourceName } from "./merge.js";
 import { type ImportPlan, usedManifestPorts } from "./plan.js";
+import type { ExtraPort } from "./types.js";
 
 export type WriteStatus = "create" | "overwrite" | "exists";
 
@@ -302,9 +303,20 @@ export function planWrites(plan: ImportPlan, force: boolean): WritePlan {
       notes.push(
         `ports not written: a sidecar has none of its own; publish them on "${sidecarOf}"`,
       );
-    if (extraPorts.length)
+    const portText = (p: ExtraPort) =>
+      `${p.publish ?? p.hostPort ?? p.port}->${p.port}/${p.protocol ?? "tcp"}`;
+    const loopback = extraPorts.filter((p) => !p.bind && !p.publish);
+    const everywhere = extraPorts.filter((p) => p.bind === "0.0.0.0");
+    const fromCompose = extraPorts.filter((p) => p.publish);
+    if (loopback.length)
+      notes.push(`published on 127.0.0.1 only: ${loopback.map(portText).join(", ")}`);
+    if (everywhere.length)
       notes.push(
-        `published on 127.0.0.1 only: ${extraPorts.map((p) => `${p.hostPort ?? p.port}->${p.port}/${p.protocol ?? "tcp"}`).join(", ")}`,
+        `published on every interface, as in Compose: ${everywhere.map(portText).join(", ")} (flisk doctor lists these)`,
+      );
+    if (fromCompose.length)
+      notes.push(
+        `published as Compose wrote the host side: ${fromCompose.map(portText).join(", ")}`,
       );
     // Bind mounts are relative to the service directory in service.json, and must stay inside the project.
     const serviceDir = dirname(path);
