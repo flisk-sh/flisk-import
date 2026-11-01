@@ -87,11 +87,19 @@ export const EXPECTATIONS: Record<string, Expectation> = {
         },
         routed,
       ),
-      sidekiq: svc({ match: { buildContext: "../../.." } }, privateSvc),
+      sidekiq: svc(
+        {
+          match: {
+            buildContext: "../../..",
+            container: { command: ["bundle", "exec", "sidekiq"] },
+          },
+        },
+        privateSvc,
+      ),
       db: { match: { exposeViaProxy: false, port: 5432 }, without: ["healthCheckPath"] },
       redis: privateSvc,
     },
-    plan: ["not written: set it as CMD/ENTRYPOINT in Dockerfile"],
+    plan: ["build:     ./ with Dockerfile"],
   },
   "django-celery": {
     services: {

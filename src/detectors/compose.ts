@@ -672,58 +672,36 @@ export function shellWords(text: string): string[] | undefined {
 }
 
 /**
- * Compose `command`/`entrypoint` as the argument vector the container runs. A list is kept as it is; a string is split
- * into words as Compose splits it, with no shell, so an image ENTRYPOINT (minio) gets `server /export` as its arguments.
- * Only a string that cannot be split, or that reads `$VAR` at run time, runs through `sh -c`; `shell` says why.
+ * Compose `command`/`entrypoint` as the argument vector for service.json `container.command` / `container.entrypoint`.
+ * A list is kept as it is; a string is split into words as Compose splits it, with no shell, so an image ENTRYPOINT
+ * (minio) gets `server /export` as its arguments. `$$` and `${VAR}` stay as written: Flisk writes the vector into the
+ * generated Compose file, where Compose reads them exactly as it did in the original file. Only a string whose quotes do
+ * not balance runs through `sh -c`, and `note` says so. An empty `entrypoint` list is kept (it drops the image's ENTRYPOINT).
+ * Elements Flisk would refuse (empty, or with a control character) give no vector, with a `note`.
  */
-function containerCommandOf(command: unknown): { argv: string[]; note?: string } | undefined {
+function containerCommandOf(
+  command: unknown,
+  { allowEmpty = false }: { allowEmpty?: boolean } = {},
+): { argv?: string[]; note?: string } | undefined {
+  let argv: string[] | undefined;
+  let note: string | undefined;
   if (typeof command === "string" && command.trim()) {
-    const { text, interpolates } = unescapeDollars(command);
-    if (interpolates)
-      return {
-        argv: ["sh", "-c", text],
-        note: "uses Compose variables, which Compose filled from .env; in the generated Dockerfile it runs through sh -c, so the container's shell fills them from its own environment",
-      };
-    const words = shellWords(text);
-    return words?.length
-      ? { argv: words }
-      : {
-          argv: ["sh", "-c", text],
-          note: "has unbalanced quotes; it runs through sh -c, which Compose would not do",
-        };
-  }
-  if (Array.isArray(command) && command.length > 0 && command.every((c) => typeof c === "string")) {
-    const parts = (command as string[]).map(unescapeDollars);
-    return {
-      argv: parts.map((p) => p.text),
-      ...(parts.some((p) => p.interpolates)
-        ? {
-            note: "uses Compose variables, which Compose filled from .env; the generated Dockerfile passes them as written (a sh -c argument fills them from the container's environment)",
-          }
-        : {}),
-    };
-  }
-  return undefined;
-}
-
-/**
- * A Compose command as the container sees it: `$$` is Compose's escape for a literal `$` (so `$$PASSWORD` reaches the
- * container's shell as `$PASSWORD`). `interpolates` says whether a single `$` (`${VAR}`, `$VAR`) asks Compose to fill
- * a value from .env, which a Dockerfile cannot do.
- */
-function unescapeDollars(value: string): { text: string; interpolates: boolean } {
-  let text = "";
-  let interpolates = false;
-  for (let i = 0; i < value.length; i++) {
-    if (value[i] === "$" && value[i + 1] === "$") {
-      text += "$";
-      i++;
-      continue;
+    const words = shellWords(command);
+    if (words?.length) argv = words;
+    else {
+      argv = ["sh", "-c", command];
+      note = "has unbalanced quotes; it runs through sh -c, which Compose would not do";
     }
-    if (value[i] === "$" && /[{A-Za-z_]/.test(value[i + 1] ?? "")) interpolates = true;
-    text += value[i];
+  } else if (Array.isArray(command) && command.every((c) => typeof c === "string")) {
+    if (command.length > 0 || allowEmpty) argv = command as string[];
   }
-  return { text, interpolates };
+  if (!argv) return undefined;
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: Flisk refuses a control character in a command
+  if (argv.some((part) => part === "" || /[\u0000-\u001f\u007f]/.test(part)))
+    return {
+      note: "has an empty argument or a control character, which Flisk's container.command and container.entrypoint refuse; not written",
+    };
+  return { argv, ...(note ? { note } : {}) };
 }
 
 const DURATION_UNIT: Record<string, number> = { h: 3600, m: 60, s: 1, ms: 0.001, us: 0.000001 };
@@ -1049,7 +1027,7 @@ registerDetector({
       const command = commandOf(raw.command);
       const models = modelsOf(raw.models, isObj(root) ? root.models : undefined);
       const commandArgs = containerCommandOf(raw.command);
-      const entrypointArgs = containerCommandOf(raw.entrypoint);
+      const entrypointArgs = containerCommandOf(raw.entrypoint, { allowEmpty: true });
       const containerCommand = commandArgs?.argv;
       const containerEntrypoint = entrypointArgs?.argv;
       for (const [key, args] of [

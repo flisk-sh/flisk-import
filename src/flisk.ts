@@ -8,9 +8,10 @@ export const SERVICE_MANIFEST_SCHEMA_URL = "https://flisk.sh/schema.service.json
  * Oldest Flisk core that starts an imported project: 1.3.104 added `buildContext`, 1.3.145
  * (flisk#1018) bootstraps a project that has `.flisk/project.json` but no Tiltfile yet, and the
  * release after 1.4.10 (flisk#2646) accepts a bring-your-own port outside 4000-5999 and two-letter
- * names, which this importer now writes. Stated, not checked: it does not read the installed version.
+ * names, and 1.4.31 adds container.entrypoint next to container.command, which this importer writes for a Compose
+ * `command` / `entrypoint` instead of a generated Dockerfile. Stated, not checked: it does not read the installed version.
  */
-export const MIN_CORE_VERSION = "1.4.28";
+export const MIN_CORE_VERSION = "1.4.31";
 /**
  * The core change that runs a registered Tiltfile (`orchestration.source: "tiltfile"`) from `flisk up`. Stated, not
  * checked, like MIN_CORE_VERSION.

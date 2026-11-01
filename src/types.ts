@@ -23,9 +23,9 @@ export interface Candidate {
   /** Dockerfile path relative to `dir`. */
   dockerfile?: string;
   command?: string;
-  /** Compose `command` as the argument vector the container runs (a string runs through `sh -c`). */
+  /** Compose `command` as the argument vector for container.command (`$$` and `${VAR}` as written). */
   containerCommand?: string[];
-  /** Compose `entrypoint` as the argument vector the container starts with. */
+  /** Compose `entrypoint` as the argument vector for container.entrypoint (`[]` drops the image's ENTRYPOINT). */
   containerEntrypoint?: string[];
   /** Compose `profiles`: the service starts only when one of them is asked for. */
   profiles?: string[];
@@ -94,6 +94,10 @@ export interface HealthCheckProbe {
 }
 
 export interface ContainerOptions {
+  /** container.entrypoint (Flisk 1.4.31): Compose `entrypoint` as an argument vector. */
+  entrypoint?: string[];
+  /** container.command (Flisk 1.4.31): Compose `command` as an argument vector. */
+  command?: string[];
   capAdd?: string[];
   capDrop?: string[];
   init?: boolean;
