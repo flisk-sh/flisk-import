@@ -1502,8 +1502,9 @@ describe("include and extends, resolved through docker compose config (wger)", (
   };
   const hasDocker = (() => {
     try {
-      execFileSync("docker", ["compose", "version"], { stdio: "ignore" });
-      return true;
+      // The flags the importer passes; an older docker compose lacks them and the importer reads the YAML instead.
+      const help = execFileSync("docker", ["compose", "config", "--help"], { encoding: "utf8" });
+      return help.includes("--no-path-resolution") && help.includes("--no-env-resolution");
     } catch {
       return false;
     }
