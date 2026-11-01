@@ -89,6 +89,10 @@ export interface ExtraPort {
   port: number;
   hostPort?: number;
   protocol?: "tcp" | "udp";
+  /** "0.0.0.0" when Compose published the port on every interface (no host address); loopback is the default. */
+  bind?: "0.0.0.0";
+  /** The host side as Compose wrote it, when it names another address or a `${VAR:-default}` (flisk#2947). */
+  publish?: string;
 }
 
 export interface VolumeMount {

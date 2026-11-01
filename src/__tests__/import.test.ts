@@ -529,9 +529,51 @@ describe("Compose runtime keys (capabilities, ports, network_mode, volumes, rest
     expect(manifest("caddy")).toMatchObject({
       restart: "unless-stopped",
       exposeViaProxy: false,
-      extraPorts: [{ port: 80 }, { port: 443 }, { port: 443, protocol: "udp" }],
+      extraPorts: [
+        { port: 80, bind: "0.0.0.0" },
+        { port: 443, bind: "0.0.0.0" },
+        { port: 443, bind: "0.0.0.0", protocol: "udp" },
+      ],
     });
-    expect(text).toContain("published on 127.0.0.1 only: 80->80/tcp, 443->443/tcp, 443->443/udp");
+    expect(text).toContain(
+      "published on every interface, as in Compose: 80->80/tcp, 443->443/tcp, 443->443/udp",
+    );
+  });
+
+  // Compose publishes on every interface unless the mapping names an address; a migration must not change who can connect.
+  it.each([
+    ["'8080:7000'", { port: 7000, hostPort: 8080, bind: "0.0.0.0" }],
+    ["'0.0.0.0:80:7000'", { port: 7000, hostPort: 80, bind: "0.0.0.0" }],
+    ["'127.0.0.1:8080:7000'", { port: 7000, hostPort: 8080 }],
+    ["'7000'", { port: 7000 }],
+    ["'192.168.1.10:8080:7000'", { port: 7000, publish: "192.168.1.10:8080" }],
+    ['"${APP_HTTP_BIND:-80}:7000"', { port: 7000, publish: "${APP_HTTP_BIND:-80}" }],
+    ['"127.0.0.1:${APP_PORT:-8080}:7000"', { port: 7000, publish: "127.0.0.1:${APP_PORT:-8080}" }],
+    ["{ target: 7000, published: 8080 }", { port: 7000, hostPort: 8080, bind: "0.0.0.0" }],
+    ["{ target: 7000, published: '8080', host_ip: 127.0.0.1 }", { port: 7000, hostPort: 8080 }],
+  ])("keeps the host address of %s", (spec, expected) => {
+    tree({
+      "docker-compose.yml": `services:\n  proxy:\n    image: caddy:2\n    ports: [${spec}, '9998:9998', '9999:9999']\n`,
+    });
+    const writes = planWrites(buildPlan(root), false);
+    const proxy = writes.items.find((i) => i.service.name === "proxy")?.manifest as Record<
+      string,
+      unknown
+    >;
+    expect((proxy.extraPorts as unknown[])[0]).toEqual(expected);
+  });
+
+  it("does not write a host side Flisk cannot publish", () => {
+    tree({
+      "docker-compose.yml":
+        "services:\n  proxy:\n    image: caddy:2\n    ports: ['${PORT}:7000', '9998:9998', '9999:9999']\n",
+    });
+    const writes = planWrites(buildPlan(root), false);
+    const proxy = writes.items.find((i) => i.service.name === "proxy")?.manifest as Record<
+      string,
+      unknown
+    >;
+    expect((proxy.extraPorts as unknown[])[0]).toEqual({ port: 7000 });
   });
 
   it("rewrites bind mounts relative to the service directory and keeps named volumes", () => {
