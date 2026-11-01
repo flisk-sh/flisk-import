@@ -7,6 +7,7 @@ import { registerDetector } from "../registry.js";
 import type {
   Candidate,
   ContainerOptions,
+  DependsOnCondition,
   ExtraPort,
   HealthCheckProbe,
   ModelRef,
@@ -63,6 +64,7 @@ const TRANSLATED_KEYS = new Set([
   "env_file",
   "tmpfs",
   "deploy",
+  "logging",
   "stop_grace_period",
   "extra_hosts",
   "ulimits",
@@ -368,22 +370,47 @@ function volumeOf(entry: unknown, composeDir: string): VolumeMount | undefined {
   let target: unknown;
   let readOnly = false;
   let type: unknown;
+  let selinux: "z" | "Z" | undefined;
   if (typeof entry === "string") {
-    const parts = entry.split(":");
-    if (parts.length < 2 || parts.length > 3) return undefined;
-    [source, target] = parts;
-    readOnly = parts[2] === "ro";
-    if (parts[2] !== undefined && parts[2] !== "ro" && parts[2] !== "rw") return undefined;
+    // A `${NAME:-./path}` source has a colon of its own.
+    const match = entry.match(/^(\$\{[^}]*\}|[^:]*):([^:]*)(?::([^:]*))?$/);
+    if (!match) return undefined;
+    [, source, target] = match;
+    for (const option of match[3] === undefined ? [] : match[3].split(",")) {
+      if (option === "ro") readOnly = true;
+      else if (option === "z" || option === "Z") selinux = option;
+      else if (option !== "rw") return undefined;
+    }
   } else if (isObj(entry)) {
     ({ source, target, type } = entry);
     readOnly = entry.read_only === true;
     if (type !== undefined && type !== "volume" && type !== "bind") return undefined;
+    const label = isObj(entry.bind) ? entry.bind.selinux : undefined;
+    if (label === "z" || label === "Z") selinux = label;
+    else if (label !== undefined) return undefined;
   } else {
     return undefined;
   }
   if (typeof source !== "string" || typeof target !== "string" || !CONTAINER_PATH.test(target))
     return undefined;
+  // `${NAME:-./path}`: a bind path from the environment, with a default inside the project.
+  const fromEnv = source.match(
+    /^\$\{([A-Za-z_][A-Za-z0-9_]*)(:?-)(\.{1,2}(?:\/[A-Za-z0-9_.-]+)*\/?)\}$/,
+  );
+  if (fromEnv) {
+    const resolved = normalize(join(composeDir, fromEnv[3] as string));
+    if (resolved === ".." || resolved.startsWith("../")) return undefined;
+    return {
+      source: resolved,
+      target,
+      ...(readOnly ? { readOnly } : {}),
+      bind: true,
+      fromEnv: { name: fromEnv[1] as string, op: fromEnv[2] as ":-" | "-" },
+      ...(selinux ? { selinux } : {}),
+    };
+  }
   const bind = type === "bind" || source.startsWith(".") || source.startsWith("/");
+  if (!bind && selinux) return undefined;
   if (!bind) {
     return VOLUME_NAME.test(source)
       ? { source, target, ...(readOnly ? { readOnly } : {}), bind }
@@ -392,7 +419,64 @@ function volumeOf(entry: unknown, composeDir: string): VolumeMount | undefined {
   if (isAbsolute(source) || !HOST_PATH.test(source)) return undefined;
   const resolved = normalize(join(composeDir, source));
   if (resolved === ".." || resolved.startsWith("../")) return undefined;
-  return { source: resolved, target, ...(readOnly ? { readOnly } : {}), bind };
+  return {
+    source: resolved,
+    target,
+    ...(readOnly ? { readOnly } : {}),
+    bind,
+    ...(selinux ? { selinux } : {}),
+  };
+}
+
+const ARG_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
+/** Compose build.args (a map, or a list of NAME=value) as strings; undefined when there are none or one is unusable. */
+function buildArgsOf(build: unknown): Record<string, string> | undefined {
+  if (!isObj(build) || build.args === undefined) return undefined;
+  const pairs: [string, unknown][] = Array.isArray(build.args)
+    ? build.args.map((a) =>
+        typeof a === "string" && a.includes("=")
+          ? [a.slice(0, a.indexOf("=")), a.slice(a.indexOf("=") + 1)]
+          : [String(a), undefined],
+      )
+    : isObj(build.args)
+      ? Object.entries(build.args)
+      : [];
+  const out: Record<string, string> = {};
+  for (const [name, value] of pairs) {
+    if (!ARG_NAME.test(name) || value === undefined || value === null || typeof value === "object")
+      return undefined;
+    const text = String(value);
+    if (text.includes("\n")) return undefined;
+    out[name] = text;
+  }
+  return Object.keys(out).length ? out : undefined;
+}
+
+/** Compose logging: a driver and string options (max-file: 3 becomes "3"). */
+function loggingOf(
+  value: unknown,
+): { driver?: string; options?: Record<string, string> } | undefined {
+  if (!isObj(value)) return undefined;
+  const out: { driver?: string; options?: Record<string, string> } = {};
+  if (value.driver !== undefined) {
+    if (typeof value.driver !== "string" || !/^[a-z0-9][a-z0-9_.-]*$/.test(value.driver))
+      return undefined;
+    out.driver = value.driver;
+  }
+  if (value.options !== undefined) {
+    if (!isObj(value.options)) return undefined;
+    const options: Record<string, string> = {};
+    for (const [key, v] of Object.entries(value.options)) {
+      if (!/^[A-Za-z0-9][A-Za-z0-9_.-]*$/.test(key) || v === null || typeof v === "object")
+        return undefined;
+      const text = String(v);
+      if (/[\n\r]/.test(text)) return undefined;
+      options[key] = text;
+    }
+    out.options = options;
+  }
+  return Object.keys(out).length ? out : undefined;
 }
 
 /** Compose's project name: top-level `name`, else the directory name, lowercased with other characters dropped. */
@@ -920,6 +1004,34 @@ registerDetector({
           reason: `service "${name}" publishes extra container ports (${ports.filter((port) => port !== selectedPort).join(", ")}); Flisk routes only ${selectedPort} and keeps the others published as extraPorts`,
         });
       }
+      // Every dependency keeps its Compose condition; the list form, and a map entry without one, mean service_started.
+      const dependsOnConditions: Record<string, DependsOnCondition> = {};
+      const dependencyEntries: [string, unknown][] = Array.isArray(raw.depends_on)
+        ? raw.depends_on
+            .filter((d): d is string => typeof d === "string")
+            .map((d) => [d, undefined])
+        : isObj(raw.depends_on)
+          ? Object.entries(raw.depends_on)
+          : [];
+      for (const [dep, value] of dependencyEntries) {
+        const condition = isObj(value) ? value.condition : undefined;
+        dependsOnConditions[dep] =
+          condition === "service_healthy" || condition === "service_completed_successfully"
+            ? condition
+            : "service_started";
+      }
+      const buildArgs = buildArgsOf(raw.build);
+      if (raw.build !== undefined && isObj(raw.build) && raw.build.args !== undefined && !buildArgs)
+        skips.push({
+          ...base,
+          reason: `service "${name}" build.args ${JSON.stringify(raw.build.args)} has names or values Flisk does not accept; not used`,
+        });
+      const logging = loggingOf(raw.logging);
+      if (raw.logging !== undefined && !logging)
+        skips.push({
+          ...base,
+          reason: `service "${name}" logging ${JSON.stringify(raw.logging)} has a driver or options Flisk does not accept; not used`,
+        });
       const dependsOn = Array.isArray(raw.depends_on)
         ? raw.depends_on.filter((d): d is string => typeof d === "string")
         : isObj(raw.depends_on)
@@ -1070,6 +1182,9 @@ registerDetector({
         ...(Object.keys(env).length ? { env } : {}),
         ...(Object.keys(envRefs).length ? { envRefs } : {}),
         ...(dependsOn.length ? { dependsOn } : {}),
+        ...(Object.keys(dependsOnConditions).length ? { dependsOnConditions } : {}),
+        ...(buildArgs ? { buildArgs } : {}),
+        ...(logging ? { logging } : {}),
         ...(container ? { container } : {}),
         ...(extraPorts.length ? { extraPorts } : {}),
         ...(sidecarOf ? { sidecarOf } : {}),
