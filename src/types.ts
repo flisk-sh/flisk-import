@@ -97,6 +97,8 @@ export interface VolumeMount {
   target: string;
   readOnly?: boolean;
   bind: boolean;
+  /** The Docker volume's own name as Compose created it (myapp_data), so Flisk keeps using the install's data. */
+  name?: string;
 }
 
 export interface Skip {

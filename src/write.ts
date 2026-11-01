@@ -344,10 +344,12 @@ export function planWrites(plan: ImportPlan, force: boolean): WritePlan {
       ...(sidecarOf ? { sidecarOf } : {}),
       ...(volumes.length
         ? {
-            volumes: volumes.map(({ source, target, readOnly }) => ({
+            // `name` keeps the Docker volume the Compose install already has, so its data is used with no copy.
+            volumes: volumes.map(({ source, target, readOnly, name }) => ({
               source,
               target,
               ...(readOnly ? { readOnly } : {}),
+              ...(name ? { name } : {}),
             })),
           }
         : {}),

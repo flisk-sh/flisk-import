@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs";
-import { dirname, isAbsolute, join, normalize } from "node:path/posix";
+import { basename, dirname, isAbsolute, join, normalize } from "node:path/posix";
 import { isAlias, isMap, type Node, parseDocument, visit } from "yaml";
 import { HEALTH_CHECK_PATH_PATTERN } from "../flisk.js";
 import { registerDetector } from "../registry.js";
@@ -179,6 +179,32 @@ function volumeOf(entry: unknown, composeDir: string): VolumeMount | undefined {
   return { source: resolved, target, ...(readOnly ? { readOnly } : {}), bind };
 }
 
+/** Compose's project name: top-level `name`, else the directory name, lowercased with other characters dropped. */
+function projectNameOf(root: unknown, absPath: string): string | undefined {
+  const raw =
+    isObj(root) && typeof root.name === "string" && !root.name.includes("$")
+      ? root.name
+      : basename(dirname(absPath));
+  const name = raw.toLowerCase().replace(/[^a-z0-9_-]/g, "");
+  return /^[a-z0-9]/.test(name) ? name : undefined;
+}
+
+/**
+ * The Docker name of a named volume, as `docker compose up` created it: its own `name:`, the key itself when it is
+ * `external`, else `<project>_<key>`. Undefined when the name uses Compose variables.
+ */
+function dockerVolumeName(
+  key: string,
+  volumes: unknown,
+  project: string | undefined,
+): string | undefined {
+  const def = isObj(volumes) ? volumes[key] : undefined;
+  if (isObj(def) && typeof def.name === "string")
+    return /^[A-Za-z0-9][A-Za-z0-9_.-]*$/.test(def.name) ? def.name : undefined;
+  if (isObj(def) && (def.external === true || isObj(def.external))) return key;
+  return project ? `${project}_${key}` : undefined;
+}
+
 function envNames(environment: unknown): string[] {
   if (Array.isArray(environment)) {
     return environment
@@ -349,6 +375,7 @@ registerDetector({
       return { candidates, skips: [...skips, { ...base, reason: "no `services:` map" }] };
     }
 
+    const project = projectNameOf(root, absPath);
     for (const [name, raw] of Object.entries(services)) {
       if (!isObj(raw)) {
         skips.push({ ...base, reason: `service "${name}" is not a map` });
@@ -477,7 +504,11 @@ registerDetector({
       const volumes: VolumeMount[] = [];
       for (const entry of Array.isArray(raw.volumes) ? raw.volumes : []) {
         const volume = volumeOf(entry, composeDir);
-        if (volume) volumes.push(volume);
+        const dockerName =
+          volume && !volume.bind
+            ? dockerVolumeName(volume.source, isObj(root) ? root.volumes : undefined, project)
+            : undefined;
+        if (volume) volumes.push(dockerName ? { ...volume, name: dockerName } : volume);
         else
           skips.push({
             ...base,
