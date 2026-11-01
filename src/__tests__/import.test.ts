@@ -1537,7 +1537,14 @@ describe("include and extends, resolved through docker compose config (wger)", (
       const writes = planWrites(plan, false);
       applyWrites(writes);
       const manifest = (name: string) => JSON.parse(readFileSync(serviceJson(name), "utf8"));
-      expect(writes.rejected).toEqual([]);
+      let why = "";
+      try {
+        execFileSync("docker", ["compose", "--profile", "*", "-f", join(root, "docker-compose.yml"), "config", "--no-interpolate", "--no-env-resolution", "--no-path-resolution", "--format", "json"], { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+      } catch (e) {
+        why = String((e as { stderr?: string }).stderr);
+      }
+      why += execFileSync("docker", ["compose", "version"], { encoding: "utf8" });
+      expect(writes.rejected, why).toEqual([]);
       expect(manifest("db")).toMatchObject({
         image: "docker.io/postgres:15-alpine",
         envFile: ["../../../config/prod.env"],
