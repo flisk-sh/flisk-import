@@ -293,9 +293,8 @@ describe("Compose values Flisk cannot take as they are", () => {
         "    volumes: ['./data:/data']",
       ].join("\n"),
     );
-    expect(text).toContain('service "api" keys not translated: command, env_file');
+    expect(text).toContain('service "api" keys not translated: env_file');
     expect(text).not.toContain("env_file, volumes");
-    expect(text).not.toContain("command:   ");
   });
 
   it("does not import a service whose build context is outside the directory", () => {
@@ -668,5 +667,66 @@ describe("environment values that cannot be secrets go into service.json env", (
     const notes = writes.items.find((i) => i.service.name === "app")?.notes.join("\n");
     expect(notes).toContain("env reads APP_URL from the project .env; add them there");
     expect(notes).not.toContain("APP_PORT");
+  });
+});
+
+describe("Compose command, healthcheck, ports and restart", () => {
+  const compose = [
+    "services:",
+    "  migrate:",
+    "    image: example/app:1",
+    "    command: bundle exec rails db:prepare",
+    "    restart: 'no'",
+    "  worker:",
+    "    image: example/app:1",
+    "    command: ['bundle', 'exec', 'sidekiq']",
+    "    restart: on-failure:5",
+    "  db:",
+    "    image: postgres:16",
+    "    ports: ['127.0.0.1:5432:5432']",
+    "    healthcheck:",
+    "      test: pg_isready -U app",
+    "      interval: 2s",
+    "      timeout: 5s",
+    "      retries: 30",
+  ].join("\n");
+
+  function written() {
+    tree({ "docker-compose.yaml": compose });
+    const plan = buildPlan(root);
+    const writes = planWrites(plan, false);
+    applyWrites(writes);
+    return (name: string) => JSON.parse(readFileSync(serviceJson(name), "utf8"));
+  }
+
+  it("reads docker-compose.yaml", () => {
+    expect(buildPlan((tree({ "docker-compose.yaml": compose }), root)).services).toHaveLength(3);
+  });
+
+  it("wraps an image in a Dockerfile that carries the Compose command", () => {
+    const manifest = written();
+    expect(manifest("migrate")).toMatchObject({ buildContext: ".", dockerfile: "Dockerfile" });
+    expect(manifest("migrate")).not.toHaveProperty("image");
+    expect(readFileSync(join(dirname(serviceJson("migrate")), "Dockerfile"), "utf8")).toContain(
+      'FROM example/app:1\nCMD ["sh","-c","bundle exec rails db:prepare"]\n',
+    );
+    expect(readFileSync(join(dirname(serviceJson("worker")), "Dockerfile"), "utf8")).toContain(
+      'CMD ["bundle","exec","sidekiq"]',
+    );
+  });
+
+  it("keeps on-failure without its retry limit", () => {
+    expect(written()("worker").restart).toBe("on-failure");
+  });
+
+  it("keeps a published database port and writes its healthcheck as a probe command", () => {
+    const db = written()("db");
+    expect(db.extraPorts).toEqual([{ port: 5432 }]);
+    expect(db.healthCheck).toEqual({
+      command: ["sh", "-c", "pg_isready -U app"],
+      interval: 2,
+      timeout: 5,
+      retries: 30,
+    });
   });
 });

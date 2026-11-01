@@ -3,7 +3,14 @@ import { dirname, isAbsolute, join, normalize } from "node:path/posix";
 import { isAlias, isMap, type Node, parseDocument, visit } from "yaml";
 import { HEALTH_CHECK_PATH_PATTERN } from "../flisk.js";
 import { registerDetector } from "../registry.js";
-import type { Candidate, ContainerOptions, ExtraPort, Skip, VolumeMount } from "../types.js";
+import type {
+  Candidate,
+  ContainerOptions,
+  ExtraPort,
+  HealthCheckProbe,
+  Skip,
+  VolumeMount,
+} from "../types.js";
 
 type Obj = Record<string, unknown>;
 const isObj = (v: unknown): v is Obj => typeof v === "object" && v !== null && !Array.isArray(v);
@@ -47,6 +54,7 @@ const TRANSLATED_KEYS = new Set([
   "network_mode",
   "volumes",
   "restart",
+  "command",
 ]);
 
 const CAPABILITY = /^[A-Z_]+$/;
@@ -219,6 +227,51 @@ function commandOf(command: unknown): string | undefined {
   return undefined;
 }
 
+/** Compose `command` as the argument vector the container runs; a string goes through a shell, as Compose runs it. */
+function containerCommandOf(command: unknown): string[] | undefined {
+  if (typeof command === "string" && command.trim()) return ["sh", "-c", command];
+  if (Array.isArray(command) && command.length > 0 && command.every((c) => typeof c === "string"))
+    return command as string[];
+  return undefined;
+}
+
+/** Seconds from a Compose duration such as `30s` or `2m`; undefined for anything it cannot read exactly. */
+function secondsOf(value: unknown): number | undefined {
+  if (typeof value === "number" && value > 0) return value;
+  const match = typeof value === "string" ? value.match(/^(\d+)(s|m)?$/) : null;
+  if (!match) return undefined;
+  const seconds = Number(match[1]) * (match[2] === "m" ? 60 : 1);
+  return seconds > 0 ? seconds : undefined;
+}
+
+/** Compose `healthcheck` as a probe command (exit 0 is ready). `NONE` and `disable` give no probe. */
+function healthProbeOf(healthcheck: unknown): HealthCheckProbe | undefined {
+  if (!isObj(healthcheck) || healthcheck.disable === true) return undefined;
+  const test = healthcheck.test;
+  let command: string[] | undefined;
+  if (typeof test === "string") command = ["sh", "-c", test];
+  else if (Array.isArray(test) && test.every((t) => typeof t === "string")) {
+    const [kind, ...rest] = test as string[];
+    if (kind === "CMD" && rest.length > 0) command = rest;
+    else if (kind === "CMD-SHELL" && rest.length > 0) command = ["sh", "-c", rest.join(" ")];
+  }
+  if (!command) return undefined;
+  const interval = secondsOf(healthcheck.interval);
+  const timeout = secondsOf(healthcheck.timeout);
+  const retries =
+    typeof healthcheck.retries === "number" &&
+    Number.isInteger(healthcheck.retries) &&
+    healthcheck.retries > 0
+      ? healthcheck.retries
+      : undefined;
+  return {
+    command,
+    ...(interval ? { interval } : {}),
+    ...(timeout ? { timeout } : {}),
+    ...(retries ? { retries } : {}),
+  };
+}
+
 function healthPathOf(healthcheck: unknown): string | undefined {
   if (!isObj(healthcheck) || !Array.isArray(healthcheck.test)) return undefined;
   const test = healthcheck.test
@@ -238,7 +291,7 @@ function healthPathOf(healthcheck: unknown): string | undefined {
 
 registerDetector({
   id: "compose",
-  claim: (relPath) => relPath === "docker-compose.yml",
+  claim: (relPath) => /^(docker-)?compose\.ya?ml$/.test(relPath),
   parse(absPath, relPath) {
     const composeDir = dirname(relPath) === "." ? "" : dirname(relPath);
     const base = { file: relPath, detector: "compose" };
@@ -356,6 +409,8 @@ registerDetector({
           ? Object.keys(raw.depends_on)
           : [];
       const command = commandOf(raw.command);
+      const containerCommand = containerCommandOf(raw.command);
+      const healthProbe = healthProbeOf(raw.healthcheck);
       const envKeys = envNames(raw.environment);
       const env = envValues(raw.environment);
       const envRefs = envReferences(raw.environment);
@@ -378,9 +433,10 @@ registerDetector({
         });
       }
       // Every published port Flisk does not route stays published, on 127.0.0.1 (service.json extraPorts).
+      const proxied = selectedPort !== undefined && !NON_HTTP_PORTS.has(selectedPort);
       const extraPorts = (Array.isArray(raw.ports) ? raw.ports : [])
         .map(publishedPort)
-        .filter((p): p is ExtraPort => p !== undefined && p.port !== selectedPort);
+        .filter((p): p is ExtraPort => p !== undefined && (p.port !== selectedPort || !proxied));
       let sidecarOf: string | undefined;
       if (raw.network_mode !== undefined) {
         const mode = typeof raw.network_mode === "string" ? raw.network_mode : "";
@@ -403,10 +459,21 @@ registerDetector({
             reason: `service "${name}" volume ${JSON.stringify(entry)} is not translated (an anonymous volume, a path outside the imported directory, or Compose variables); not mounted`,
           });
       }
-      const restart =
-        typeof raw.restart === "string" && RESTART.has(raw.restart)
-          ? (raw.restart as Candidate["restart"])
+      // `on-failure:5` caps the retries; Flisk has the policy without the cap.
+      const restartName =
+        typeof raw.restart === "string"
+          ? raw.restart.replace(/^(on-failure):\d+$/, "$1")
           : undefined;
+      const restart =
+        restartName !== undefined && RESTART.has(restartName)
+          ? (restartName as Candidate["restart"])
+          : undefined;
+      if (restart && restartName !== raw.restart) {
+        skips.push({
+          ...base,
+          reason: `service "${name}" restart ${JSON.stringify(raw.restart)} keeps "${restart}"; the retry limit is not carried over`,
+        });
+      }
       if (raw.restart !== undefined && !restart) {
         skips.push({
           ...base,
@@ -432,6 +499,8 @@ registerDetector({
         ...(typeof raw.image === "string" ? { image: raw.image } : {}),
         ...(dockerfile ? { dockerfile } : {}),
         ...(command ? { command } : {}),
+        ...(containerCommand ? { containerCommand } : {}),
+        ...(healthProbe ? { healthCheck: healthProbe } : {}),
         ...(selectedPort !== undefined ? { port: selectedPort } : {}),
         ...(healthCheckPath ? { healthCheckPath } : {}),
         exposeViaProxy,

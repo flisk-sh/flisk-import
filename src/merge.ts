@@ -6,6 +6,7 @@ import type {
   Confidence,
   ContainerOptions,
   ExtraPort,
+  HealthCheckProbe,
   Skip,
   Source,
   VolumeMount,
@@ -24,6 +25,8 @@ export interface MergedService {
   image?: string;
   dockerfile?: string;
   command?: string;
+  containerCommand?: string[];
+  healthCheck?: HealthCheckProbe;
   /** Procfile commands retained for the importer's buildability check. */
   procfileCommands: string[];
   port?: number;
@@ -102,10 +105,9 @@ function rank(candidate: Candidate): number {
   return Math.min(...candidate.sources.map((s) => precedence(s.detector)));
 }
 
-function firstOf<K extends "container" | "extraPorts" | "volumes" | "restart">(
-  ordered: Candidate[],
-  key: K,
-): Partial<Pick<Candidate, K>> {
+function firstOf<
+  K extends "container" | "extraPorts" | "volumes" | "restart" | "containerCommand" | "healthCheck",
+>(ordered: Candidate[], key: K): Partial<Pick<Candidate, K>> {
   const holder = ordered.find((c) => c[key] !== undefined);
   return holder ? ({ [key]: holder[key] } as Partial<Pick<Candidate, K>>) : {};
 }
@@ -133,6 +135,8 @@ function mergeGroup(
     ...firstOf(ordered, "extraPorts"),
     ...firstOf(ordered, "volumes"),
     ...firstOf(ordered, "restart"),
+    ...firstOf(ordered, "containerCommand"),
+    ...firstOf(ordered, "healthCheck"),
     ...(ordered.find((c) => c.sidecarOf)?.sidecarOf
       ? { sidecarOf: resolve(ordered.find((c) => c.sidecarOf)?.sidecarOf as string) }
       : {}),

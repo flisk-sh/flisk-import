@@ -23,6 +23,10 @@ export interface Candidate {
   /** Dockerfile path relative to `dir`. */
   dockerfile?: string;
   command?: string;
+  /** Compose `command` as the argument vector the container runs (a string runs through `sh -c`). */
+  containerCommand?: string[];
+  /** Compose `healthcheck` as a probe command that exits 0 when the service is ready. */
+  healthCheck?: HealthCheckProbe;
   /** The port the service listens on inside its container, as stated by the source. */
   port?: number;
   /** HTTP path found in a Compose healthcheck, when it uses an explicit URL. */
@@ -52,6 +56,14 @@ export interface Candidate {
   restart?: "no" | "on-failure" | "unless-stopped" | "always";
   confidence: Confidence;
   sources: Source[];
+}
+
+export interface HealthCheckProbe {
+  command: string[];
+  /** Seconds. */
+  interval?: number;
+  timeout?: number;
+  retries?: number;
 }
 
 export interface ContainerOptions {
