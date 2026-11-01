@@ -18,6 +18,11 @@ export function formatPlan(plan: ImportPlan, writes: WritePlan): string {
     "",
   );
   if (writes.projectConfig) out.push(`  .flisk/project.json  [create Flisk project]`, "");
+  if (writes.projectConfigUpdate)
+    out.push(
+      `  .flisk/project.json  [add composeProjectNames.${writes.stack}: "${writes.composeProjectName}", so an export keeps the Compose project name]`,
+      "",
+    );
   for (const service of plan.services) {
     const item = writes.items.find((i) => i.service === service);
     out.push(`  ${service.name}  (${service.kind}${service.dir ? `, ${service.dir}/` : ""})`);

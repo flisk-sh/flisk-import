@@ -1,5 +1,8 @@
+import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, relative, resolve } from "node:path";
+import { parse as parseYaml } from "yaml";
+import { composeTemplateText, isComposeExpression, projectNameOf } from "./detectors/compose.js";
 import { ImportError } from "./errors.js";
 import {
   BYO_PORT_RANGE,
@@ -33,10 +36,22 @@ export interface WritePlan {
   stack: string;
   items: WriteItem[];
   projectConfig?: { path: string; content: string };
+  /**
+   * The existing .flisk/project.json with `composeProjectNames.<stack>` added: the project name `docker compose` gave
+   * this Compose file, so an export (flisk-export compose) keeps its container and volume names.
+   */
+  projectConfigUpdate?: { path: string; content: string };
+  /** That Compose project name, when one could be read. */
+  composeProjectName?: string;
   /** Services that could not be written, with the reason. */
   rejected: { name: string; reason: string }[];
-  /** Values from docker-compose.yml to append to the project .env (gitignored); keys it already has are kept. */
-  env: { path: string; add: Record<string, string> };
+  /**
+   * Values from docker-compose.yml to append to a local env file; keys it already has are kept. That is the project
+   * .env, unless git tracks it (a Symfony-style repo commits its .env defaults): then `.env.local` when git already
+   * ignores it, else `.flisk/.env.import`. `gitignore` is the entry to add to .gitignore, if any; `tracked` names the
+   * tracked .env that is left alone.
+   */
+  env: { path: string; add: Record<string, string>; gitignore?: string; tracked?: string };
 }
 
 /** Secret names the service schema accepts (`secrets.required`). */
@@ -46,26 +61,47 @@ const CREDENTIAL_NAME =
   /PASS|SECRET|TOKEN|KEY|PRIVATE|CREDENTIAL|AUTH|HMAC|SALT|CERT|SESSION|COOKIE/i;
 
 /**
- * Whether a literal Compose value cannot be a secret, so it may be committed in service.json `env`: a number, true or false,
- * or the address of another service in this import (a URL or host:port with no user, password, query or fragment).
+ * Whether a literal value may hold a credential although its name does not say so: a URL or `user:pass@host` with a
+ * user or password, a query parameter named like a credential, a PEM block, a long random-looking token, or a value
+ * that says it is one (SECRET, TOKEN, PASSWORD).
  */
-function isPlainValue(value: string, serviceHosts: Set<string>): boolean {
-  if (/^-?\d+(\.\d+)?$/.test(value) || /^(true|false)$/i.test(value)) return true;
-  const hostPort = value.match(/^([a-z0-9][a-z0-9._-]*):(\d{1,5})$/);
-  if (hostPort) return serviceHosts.has(hostPort[1] as string);
+/** Query parameters that carry a credential (`?token=`, `?api_key=`, `&sig=`); `authSource` and the like do not. */
+const CREDENTIAL_QUERY =
+  /token|secret|pass(word|wd)?$|api[_-]?key|^key$|^sig(nature)?$|access[_-]?key/i;
+
+function looksSecret(value: string): boolean {
+  if (/^[^\s:@/]+:[^\s@/]+@/.test(value) || value.includes("-----BEGIN")) return true;
+  if (/SECRET|TOKEN|PASSWORD|PASSWD/i.test(value)) return true;
+  if (/^[A-Za-z0-9+/_=.-]{32,}$/.test(value) && /[0-9]/.test(value) && /[A-Za-z]/.test(value))
+    return true;
+  if (!value.includes("://")) return false;
   try {
     const url = new URL(value);
     return (
-      serviceHosts.has(url.hostname) &&
-      !url.username &&
-      !url.password &&
-      !url.search &&
-      !url.hash &&
-      /^[A-Za-z0-9._~/-]*$/.test(url.pathname)
+      Boolean(url.username || url.password) ||
+      [...url.searchParams.keys()].some((key) => CREDENTIAL_QUERY.test(key))
     );
   } catch {
-    return false;
+    return /:\/\/[^/\s]*@/.test(value);
   }
+}
+
+/**
+ * `ARG` lines for the Compose variables in an image, so `FROM postgres:${POSTGRES_VERSION:-18}-alpine` can use them:
+ * Docker substitutes only build arguments declared before FROM. The default is the expression's.
+ */
+function buildArgLines(image: string): string {
+  const args = new Map<string, string | undefined>();
+  for (const m of image.matchAll(/\$\{([A-Za-z_][A-Za-z0-9_]*)(?::?-([^}]*))?\}/g))
+    if (!args.has(m[1] as string)) args.set(m[1] as string, m[2]);
+  return [...args]
+    .map(([name, value]) => (value === undefined ? `ARG ${name}\n` : `ARG ${name}=${value}\n`))
+    .join("");
+}
+
+/** `POSTGRES_PASSWORD_FILE=/run/secrets/pg`: the path of a mounted secret file, which is not a secret itself. */
+function isSecretFilePath(key: string, value: string): boolean {
+  return /_FILE$/.test(key) && /^\/[A-Za-z0-9_./-]+$/.test(value);
 }
 
 function readEnvKeys(path: string): Set<string> {
@@ -113,20 +149,31 @@ export function planWrites(plan: ImportPlan, force: boolean): WritePlan {
   }
   const servicesDir = join(projectRoot, "services");
   const projectConfigPath = join(projectRoot, ".flisk", "project.json");
+  const composeProjectName = composeProjectNameOf(plan);
+  const composeNames = composeProjectName
+    ? { composeProjectNames: { [stack]: composeProjectName } }
+    : {};
   const projectConfig = existsSync(projectConfigPath)
     ? undefined
     : {
         path: projectConfigPath,
         content: `${JSON.stringify(
-          defaultProjectConfig(projectRoot, {
-            description: "Flisk proxy and imported Compose services",
-            enabledStacks: ["proxy", stack],
-          }),
+          {
+            ...defaultProjectConfig(projectRoot, {
+              description: "Flisk proxy and imported Compose services",
+              enabledStacks: ["proxy", stack],
+            }),
+            ...composeNames,
+          },
           null,
           2,
         )}\n`,
       };
-  const envPath = join(projectRoot, ".env");
+  const projectConfigUpdate = projectConfig
+    ? undefined
+    : withComposeProjectName(projectConfigPath, stack, composeProjectName);
+  const envTarget = localEnvFile(projectRoot);
+  const envPath = envTarget.path;
   const envKept = readEnvKeys(envPath);
   const envAdd: Record<string, string> = {};
   const used = usedManifestPorts(servicesDir);
@@ -149,10 +196,6 @@ export function planWrites(plan: ImportPlan, force: boolean): WritePlan {
     return !reason;
   });
   const names = new Set(accepted.map((s) => s.name));
-  // Hostnames other services use for these: the resource name, which stays the container hostname, and the Compose name.
-  const serviceHosts = new Set(
-    plan.services.flatMap((s) => (s.originalName ? [s.name, s.originalName] : [s.name])),
-  );
 
   for (const service of accepted) {
     const path = resolve(servicesDir, stack, service.name, "service.json");
@@ -206,28 +249,41 @@ export function planWrites(plan: ImportPlan, force: boolean): WritePlan {
     // fail the probe. Leave the path out; the runtime then skips the HTTP probe.
     const nonHttp =
       service.kind === "job" || (service.image !== undefined && NON_HTTP_IMAGE.test(service.image));
-    const healthCheckPath = isPrivate || nonHttp ? undefined : (service.healthCheckPath ?? "/");
-    if (nonHttp && !isPrivate)
+    const healthOff = service.healthCheck === false;
+    const healthCheckPath =
+      isPrivate || nonHttp || healthOff ? undefined : (service.healthCheckPath ?? "/");
+    if (healthOff) notes.push("healthCheck: false: Compose turns the healthcheck off");
+    else if (nonHttp && !isPrivate)
       notes.push("no health path: the service does not serve HTTP (non-HTTP image or job)");
-    if (!isPrivate && !nonHttp && !service.healthCheckPath)
+    if (!isPrivate && !nonHttp && !healthOff && !service.healthCheckPath)
       notes.push(
         "health path / is assumed: no HTTP health path could be read from Compose. Traefik routes only while it answers 2xx or 3xx",
       );
-    // A probe command is the only way to describe a non-HTTP check; a routed service keeps its HTTP path.
-    const healthCheck =
-      service.healthCheck && !(healthCheckPath && service.healthCheckPath)
-        ? service.healthCheck
-        : undefined;
-    // Values that cannot be secrets (numbers, booleans, another service's address, pure ${VAR} references) go into the
-    // committed service.json `env` (Flisk 1.4.24). Every other name is a secret: Flisk injects it from the gitignored .env.
+    // The Compose healthcheck stays as healthCheck.command (with its interval, timeout, retries and start period) even
+    // when an HTTP path was read too, so an exported docker-compose.yml keeps it and `condition: service_healthy` holds.
+    const healthCheck = service.healthCheck;
+    if (healthCheck && healthCheckPath && service.healthCheckPath)
+      notes.push(
+        `healthCheck.command ${JSON.stringify(healthCheck.command)} is kept as Compose wrote it; Flisk probes with it instead of ${healthCheckPath}`,
+      );
+    // What goes into the committed service.json `env` (Flisk 1.4.24): a pure Compose expression (`${X}`, `${X:-default}`,
+    // `${A:-${B:-file}}`) as it is, whatever its name, since its default is already committed in the Compose file; and
+    // a literal whose name does not look like a credential and whose value does not hold one. Every other name is a
+    // secret: Flisk injects it from the gitignored .env, which gets the literal value.
     const validNames = service.envKeys.filter((key) => ENV_NAME.test(key));
     const env: Record<string, string> = {};
     for (const key of validNames) {
-      if (CREDENTIAL_NAME.test(key)) continue;
       const literal = service.env[key];
       const reference = service.envRefs[key];
-      if (literal !== undefined && isPlainValue(literal, serviceHosts)) env[key] = literal;
-      else if (literal === undefined && reference !== undefined) env[key] = reference;
+      if (literal === undefined && reference !== undefined) {
+        // A pure expression is committed whatever its name; one mixed with literal text only when that text, with
+        // the expressions taken out, could not be a credential (`mongodb://${USER}:${PASSWORD:-x}@db/app` can).
+        const text = composeTemplateText(reference) ?? "";
+        if (isComposeExpression(reference) || (!CREDENTIAL_NAME.test(key) && !looksSecret(text)))
+          env[key] = reference;
+      } else if (literal !== undefined && isSecretFilePath(key, literal)) env[key] = literal;
+      else if (literal !== undefined && !CREDENTIAL_NAME.test(key) && !looksSecret(literal))
+        env[key] = literal;
     }
     const referenced = [
       ...new Set(
@@ -273,7 +329,7 @@ export function planWrites(plan: ImportPlan, force: boolean): WritePlan {
     if (wrapWithCommand) {
       files.push({
         path: resolve(dirname(path), "Dockerfile"),
-        content: `# From the Compose \`command\` of this service (flisk import). Flisk sets no container command, so it lives here.\nFROM ${service.image}\n${service.containerEntrypoint ? `ENTRYPOINT ${JSON.stringify(service.containerEntrypoint)}\n` : ""}${service.containerCommand ? `CMD ${JSON.stringify(service.containerCommand)}\n` : ""}`,
+        content: `# From the Compose \`command\` of this service (flisk import). Flisk sets no container command, so it lives here.\n${buildArgLines(service.image as string)}FROM ${service.image}\n${service.containerEntrypoint ? `ENTRYPOINT ${JSON.stringify(service.containerEntrypoint)}\n` : ""}${service.containerCommand ? `CMD ${JSON.stringify(service.containerCommand)}\n` : ""}`,
       });
       notes.push(
         `${service.containerEntrypoint ? "entrypoint" : "command"} ${JSON.stringify(service.containerEntrypoint ?? service.containerCommand)} is written to a Dockerfile on ${service.image}`,
@@ -364,6 +420,11 @@ export function planWrites(plan: ImportPlan, force: boolean): WritePlan {
       return [{ ...volume, source: rel.startsWith(".") ? rel : `./${rel}` }];
     });
     // env_file paths are relative to the service directory in service.json, and must stay inside the project.
+    // With the project .env tracked by git, secrets live in another local file, which Flisk then reads as envFile.
+    const localEnv =
+      envTarget.git.tracked && secretNames.length
+        ? [relative(dirname(path), envPath).split("\\").join("/")]
+        : [];
     const envFile = (service.envFile ?? []).flatMap((file) => {
       const absolute = resolve(plan.root, file);
       const fromProject = relative(projectRoot, absolute).split("\\").join("/");
@@ -381,7 +442,7 @@ export function planWrites(plan: ImportPlan, force: boolean): WritePlan {
       stack,
       port,
       ...(healthCheckPath ? { healthCheckPath } : {}),
-      ...(healthCheck ? { healthCheck } : {}),
+      ...(healthCheck !== undefined ? { healthCheck } : {}),
       ...source,
       ...(isPrivate ? { exposeViaProxy: false } : {}),
       ...(dependsOn.length ? { dependsOn } : {}),
@@ -393,7 +454,9 @@ export function planWrites(plan: ImportPlan, force: boolean): WritePlan {
       ...(container ? { container } : {}),
       ...(service.models ? { models: service.models } : {}),
       ...(service.profiles ? { profiles: service.profiles } : {}),
-      ...(envFile.length ? { envFile } : {}),
+      ...(envFile.length || localEnv.length
+        ? { envFile: [...new Set([...envFile, ...localEnv])] }
+        : {}),
       ...(extraPorts.length ? { extraPorts } : {}),
       ...(sidecarOf ? { sidecarOf } : {}),
       ...(volumes.length
@@ -415,8 +478,10 @@ export function planWrites(plan: ImportPlan, force: boolean): WritePlan {
     stack,
     items,
     projectConfig,
+    ...(projectConfigUpdate ? { projectConfigUpdate } : {}),
+    ...(composeProjectName ? { composeProjectName } : {}),
     rejected,
-    env: { path: envPath, add: envAdd },
+    env: { path: envPath, add: envAdd, ...envTarget.git },
   };
 }
 
@@ -426,6 +491,8 @@ export function applyWrites(writes: WritePlan): WriteItem[] {
     mkdirSync(dirname(writes.projectConfig.path), { recursive: true });
     writeFileSync(writes.projectConfig.path, writes.projectConfig.content, { flag: "wx" });
   }
+  if (writes.projectConfigUpdate)
+    writeFileSync(writes.projectConfigUpdate.path, writes.projectConfigUpdate.content);
   for (const item of writes.items) {
     if (item.status === "exists") continue;
     mkdirSync(dirname(item.path), { recursive: true });
@@ -439,7 +506,8 @@ export function applyWrites(writes: WritePlan): WriteItem[] {
     const lines = keys.map((key) => envLine(key, writes.env.add[key] as string));
     const block = `${existing && !existing.endsWith("\n") ? "\n" : ""}# From docker-compose.yml (flisk import)\n${lines.join("\n")}\n`;
     writeFileSync(writes.env.path, existing + block);
-    ensureGitignored(writes.projectRoot, ".env");
+    mkdirSync(dirname(writes.env.path), { recursive: true });
+    if (writes.env.gitignore) ensureGitignored(writes.projectRoot, writes.env.gitignore);
   }
   return written;
 }
@@ -448,7 +516,84 @@ export function manifestRelPath(plan: ImportPlan, item: WriteItem): string {
   return relative(plan.root, item.path).split("\\").join("/");
 }
 
-/** Keeps the project .env out of git: it now holds values copied from docker-compose.yml. */
+/** The project name `docker compose` gives the imported Compose file: its `name:`, else its folder's name. */
+function composeProjectNameOf(plan: ImportPlan): string | undefined {
+  const file = plan.files.find((f) => /^(docker-)?compose\.ya?ml$/.test(f));
+  if (!file) return undefined;
+  const absPath = join(plan.root, file);
+  try {
+    return projectNameOf(parseYaml(readFileSync(absPath, "utf8"), { merge: true }), absPath);
+  } catch {
+    return undefined;
+  }
+}
+
+/** An existing project.json with `composeProjectNames.<stack>` set, or undefined when it has it already or is unreadable. */
+function withComposeProjectName(
+  path: string,
+  stack: string,
+  name: string | undefined,
+): { path: string; content: string } | undefined {
+  if (!name) return undefined;
+  try {
+    const config = JSON.parse(readFileSync(path, "utf8"));
+    if (typeof config !== "object" || config === null || Array.isArray(config)) return undefined;
+    const names =
+      typeof config.composeProjectNames === "object" && config.composeProjectNames !== null
+        ? config.composeProjectNames
+        : {};
+    if (names[stack] === name) return undefined;
+    return {
+      path,
+      content: `${JSON.stringify({ ...config, composeProjectNames: { ...names, [stack]: name } }, null, 2)}\n`,
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+/** Whether git in `root` tracks `file` (false outside a git repo, or without git). */
+function gitTracks(root: string, file: string): boolean {
+  try {
+    execFileSync("git", ["-C", root, "ls-files", "--error-unmatch", file], { stdio: "ignore" });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Whether git in `root` ignores `file` (false outside a git repo, or without git). */
+function gitIgnores(root: string, file: string): boolean {
+  try {
+    execFileSync("git", ["-C", root, "check-ignore", "-q", file], { stdio: "ignore" });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The local file that gets values copied from docker-compose.yml: the project .env, never one git tracks. A tracked
+ * .env is left as it is, and not added to .gitignore.
+ */
+function localEnvFile(projectRoot: string): {
+  path: string;
+  git: { gitignore?: string; tracked?: string };
+} {
+  if (!gitTracks(projectRoot, ".env"))
+    return { path: join(projectRoot, ".env"), git: { gitignore: ".env" } };
+  if (gitIgnores(projectRoot, ".env.local") && !gitTracks(projectRoot, ".env.local"))
+    return { path: join(projectRoot, ".env.local"), git: { tracked: ".env" } };
+  return {
+    path: join(projectRoot, ".flisk", ".env.import"),
+    git: {
+      tracked: ".env",
+      ...(gitIgnores(projectRoot, ".flisk/.env.import") ? {} : { gitignore: ".flisk/.env.import" }),
+    },
+  };
+}
+
+/** Keeps the local env file out of git: it now holds values copied from docker-compose.yml. */
 function ensureGitignored(projectRoot: string, entry: string): void {
   const path = join(projectRoot, ".gitignore");
   const content = existsSync(path) ? readFileSync(path, "utf8") : "";

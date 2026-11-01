@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -466,7 +467,9 @@ describe("environment from Compose", () => {
     applyWrites(writes);
     const api = JSON.parse(readFileSync(serviceJson("api"), "utf8"));
     const db = JSON.parse(readFileSync(serviceJson("db"), "utf8"));
-    expect(api.secrets).toEqual({ required: ["API_TOKEN", "DATABASE_URL"] });
+    // A pure ${API_TOKEN} holds no secret itself: it is committed and read from .env at start.
+    expect(api.env).toEqual({ API_TOKEN: "${API_TOKEN}" });
+    expect(api.secrets).toEqual({ required: ["DATABASE_URL"] });
     expect(db.secrets).toEqual({ required: ["POSTGRES_PASSWORD"] });
     expect(readFileSync(serviceJson("api"), "utf8")).not.toContain("postgres://");
 
@@ -487,9 +490,7 @@ describe("environment from Compose", () => {
     tree({ "docker-compose.yml": compose });
     const writes = planWrites(buildPlan(root), false);
     const api = writes.items.find((i) => i.service.name === "api");
-    expect(api?.notes).toContain(
-      "no literal value in docker-compose.yml for API_TOKEN; add it to the project .env",
-    );
+    expect(api?.notes).toContain("env reads API_TOKEN from the project .env; add them there");
     expect(writes.env.add).not.toHaveProperty("API_TOKEN");
   });
 
@@ -619,7 +620,8 @@ describe("Compose runtime keys (capabilities, ports, network_mode, volumes, rest
     expect(manifest("app")).toMatchObject({
       port: 3010,
       container: { capAdd: ["NET_ADMIN"], init: true },
-      extraPorts: [{ port: 9100 }],
+      // The routed 3010 stays published as in Compose, so plain `docker compose` (and the export) still reach it.
+      extraPorts: [{ port: 3010, bind: "0.0.0.0" }, { port: 9100 }],
       volumes: [{ source: "app-data", target: "/data" }],
     });
   });
@@ -705,7 +707,7 @@ describe("environment values that cannot be secrets go into service.json env", (
     "    image: redis:7",
   ].join("\n");
 
-  it("commits numbers, booleans, service addresses and ${VAR} references, and keeps the rest secret", () => {
+  it("commits literals and ${VAR} references, and keeps credential names and values that hold one secret", () => {
     tree({ "docker-compose.yml": compose });
     const writes = planWrites(buildPlan(root), false);
     applyWrites(writes);
@@ -713,16 +715,17 @@ describe("environment values that cannot be secrets go into service.json env", (
     expect(app.env).toEqual({
       CACHE: "redis:6379",
       ENABLED: "true",
+      EXTERNAL: "https://example.com/",
       HT_INVIDIOUS: "http://invidious:3000",
+      MODE: "production",
       PORT_HINT: "${APP_PORT:-8080}",
       PROXY: "socks5://tubehaus-vpn:1080",
       PUBLIC_URL: "${APP_URL}",
       RETRIES: "3",
+      SESSION_TTL: "${SESSION_TTL}",
     });
-    // A credential name, a URL with a password, an outside address and a free-form string stay out of service.json.
-    expect(app.secrets).toEqual({
-      required: ["API_KEY", "DB_URL", "EXTERNAL", "MODE", "SESSION_TTL"],
-    });
+    // A credential name and a URL with a password stay out of service.json.
+    expect(app.secrets).toEqual({ required: ["API_KEY", "DB_URL"] });
     expect(readFileSync(serviceJson("app"), "utf8")).not.toContain("hunter2");
     const env = readFileSync(join(root, ".env"), "utf8");
     expect(env).toContain("DB_URL=postgres://user:hunter2@invidious-db/app\n");
@@ -733,7 +736,7 @@ describe("environment values that cannot be secrets go into service.json env", (
     tree({ "docker-compose.yml": compose });
     const writes = planWrites(buildPlan(root), false);
     const notes = writes.items.find((i) => i.service.name === "app")?.notes.join("\n");
-    expect(notes).toContain("env reads APP_URL from the project .env; add them there");
+    expect(notes).toContain("env reads APP_URL, SESSION_TTL from the project .env; add them there");
     expect(notes).not.toContain("APP_PORT");
   });
 });
@@ -1117,5 +1120,319 @@ describe("Compose command and entrypoint strings, split as Compose splits them",
     );
     expect(file("bad")).toContain('CMD ["sh","-c","echo \\"unbalanced"]\n');
     expect(text).toContain("has unbalanced quotes; it runs through sh -c");
+  });
+});
+
+describe("Compose round trip: routed ports, healthchecks and env survive an export", () => {
+  function imported(compose: string) {
+    tree({ "docker-compose.yml": compose });
+    const plan = buildPlan(root);
+    const writes = planWrites(plan, false);
+    applyWrites(writes);
+    return {
+      text: formatPlan(plan, writes),
+      manifest: (name: string) => JSON.parse(readFileSync(serviceJson(name), "utf8")),
+    };
+  }
+
+  it("keeps a routed port's host mapping as extraPorts, but not a bare routed port", () => {
+    const { manifest } = imported(
+      [
+        "services:",
+        "  api:",
+        "    image: app:1",
+        "    ports: ['${APP_PORT:-8000}:8000']",
+        "  web:",
+        "    image: app:1",
+        "    ports: ['3000']",
+        "  local:",
+        "    image: app:1",
+        "    ports: ['127.0.0.1:4000:4000']",
+      ].join("\n"),
+    );
+    expect(manifest("api")).toMatchObject({
+      port: 8000,
+      extraPorts: [{ port: 8000, publish: "${APP_PORT:-8000}" }],
+    });
+    expect(manifest("web").port).toBe(3000);
+    expect(manifest("web")).not.toHaveProperty("extraPorts");
+    expect(manifest("local").extraPorts).toEqual([{ port: 4000 }]);
+  });
+
+  it("keeps the healthcheck command and start_period next to the HTTP path it read", () => {
+    const { manifest, text } = imported(
+      [
+        "services:",
+        "  api:",
+        "    image: app:1",
+        "    ports: ['8000:8000']",
+        "    healthcheck:",
+        "      test: ['CMD', 'curl', '-f', 'http://localhost:8000/up']",
+        "      interval: 1m30s",
+        "      timeout: 500ms",
+        "      start_period: 2m",
+      ].join("\n"),
+    );
+    expect(manifest("api").healthCheckPath).toBe("/up");
+    expect(manifest("api").healthCheck).toEqual({
+      command: ["curl", "-f", "http://localhost:8000/up"],
+      interval: 90,
+      timeout: 0.5,
+      startPeriod: 120,
+    });
+    expect(text).toContain("is kept as Compose wrote it; Flisk probes with it instead of /up");
+  });
+
+  it("commits pure Compose expressions whatever their name, and literals unless they hold a credential", () => {
+    const { manifest } = imported(
+      [
+        "services:",
+        "  api:",
+        "    image: app:1",
+        "    environment:",
+        '      DB_PASSWORD: "${DB_PASSWORD:-password}"',
+        '      APP_KEY: "${APP_KEY:-}"',
+        '      PORT_DASH: "${PORT-8080}"',
+        '      NESTED: "${A:-${B:-file}}"',
+        "      PMA_HOST: lychee_db",
+        "      MODE: worker",
+        "      DB_PASS: literal",
+        "      DSN: mysql://root:pw@db/app",
+        "      HOOK: https://hooks.example.com/x?token=abc",
+        "      BLOB: AbCdEf0123456789AbCdEf0123456789xyz",
+        "      NOTE: my-secret-value",
+        '      MIXED: "x${A}"',
+      ].join("\n"),
+    );
+    expect(manifest("api").env).toEqual({
+      APP_KEY: "${APP_KEY:-}",
+      DB_PASSWORD: "${DB_PASSWORD:-password}",
+      MIXED: "x${A}",
+      MODE: "worker",
+      NESTED: "${A:-${B:-file}}",
+      PMA_HOST: "lychee_db",
+      PORT_DASH: "${PORT-8080}",
+    });
+    expect(manifest("api").secrets.required.sort()).toEqual([
+      "BLOB",
+      "DB_PASS",
+      "DSN",
+      "HOOK",
+      "NOTE",
+    ]);
+  });
+});
+
+describe("a project .env that git tracks (Symfony-style committed defaults)", () => {
+  const compose = [
+    "services:",
+    "  worker:",
+    "    image: postgres:${POSTGRES_VERSION:-18}-alpine",
+    "    environment:",
+    "      POSTGRES_PASSWORD_FILE: /run/plmail/postgres_password",
+    "      NTFY_LISTEN_HTTP: ':80'",
+    "      NTFY_VISITOR_REQUEST_LIMIT_REPLENISH: 5s",
+    "      NTFY_AUTH_FILE: /var/lib/ntfy/auth.db",
+    "      API_TOKEN: s3cr3t",
+  ].join("\n");
+  const tracked = "APP_ENV=dev\n";
+
+  function importTracked(gitignore: string) {
+    tree({ "docker-compose.yml": compose, ".env": tracked, ".gitignore": gitignore });
+    execFileSync("git", ["init", "-q"], { cwd: root });
+    execFileSync("git", ["add", ".env", ".gitignore"], { cwd: root });
+    const writes = planWrites(buildPlan(root), false);
+    applyWrites(writes);
+    return { writes, manifest: JSON.parse(readFileSync(serviceJson("worker"), "utf8")) };
+  }
+
+  it("leaves the tracked .env and .gitignore alone and writes secrets to the ignored .env.local", () => {
+    const { writes, manifest } = importTracked("/.env.local\n");
+    expect(readFileSync(join(root, ".env"), "utf8")).toBe(tracked);
+    expect(readFileSync(join(root, ".gitignore"), "utf8")).toBe("/.env.local\n");
+    expect(readFileSync(join(root, ".env.local"), "utf8")).toContain("API_TOKEN=s3cr3t\n");
+    expect(writes.env).toMatchObject({ tracked: ".env" });
+    expect(manifest.envFile).toEqual(["../../../.env.local"]);
+    expect(manifest.secrets).toEqual({ required: ["API_TOKEN"] });
+  });
+
+  it("uses .flisk/.env.import, gitignored, when .env.local is not ignored", () => {
+    const { manifest } = importTracked("vendor/\n");
+    expect(readFileSync(join(root, ".env"), "utf8")).toBe(tracked);
+    expect(readFileSync(join(root, ".flisk", ".env.import"), "utf8")).toContain(
+      "API_TOKEN=s3cr3t\n",
+    );
+    expect(readFileSync(join(root, ".gitignore"), "utf8")).toBe("vendor/\n.flisk/.env.import\n");
+    expect(manifest.envFile).toEqual(["../../../.flisk/.env.import"]);
+  });
+
+  it("commits pl_mail's secret-file paths and plain settings in env", () => {
+    const { manifest } = importTracked("/.env.local\n");
+    expect(manifest.env).toEqual({
+      NTFY_AUTH_FILE: "/var/lib/ntfy/auth.db",
+      NTFY_LISTEN_HTTP: ":80",
+      NTFY_VISITOR_REQUEST_LIMIT_REPLENISH: "5s",
+      POSTGRES_PASSWORD_FILE: "/run/plmail/postgres_password",
+    });
+  });
+});
+
+describe("pl_mail round trip: restart default, a turned-off healthcheck and image variables in a generated Dockerfile", () => {
+  const compose = [
+    "services:",
+    "  database:",
+    "    image: postgres:${POSTGRES_VERSION:-18}-alpine",
+    "    command: postgres -c max_connections=200",
+    "  worker:",
+    "    image: example/worker:${TAG}",
+    "    command: ['php', 'bin/console', 'messenger:consume']",
+    "    restart: unless-stopped",
+    "    healthcheck:",
+    "      disable: true",
+    "  ntfy:",
+    "    image: binwiederhier/ntfy:v2",
+    "    ports: ['${NTFY_PORT:-8090}:80']",
+    "    healthcheck:",
+    "      test: ['NONE']",
+  ].join("\n");
+
+  function imported() {
+    tree({ "docker-compose.yml": compose });
+    const plan = buildPlan(root);
+    applyWrites(planWrites(plan, false));
+    return (name: string) => JSON.parse(readFileSync(serviceJson(name), "utf8"));
+  }
+
+  it('writes restart "no" for a service Compose does not restart, since Flisk defaults to unless-stopped', () => {
+    const manifest = imported();
+    expect(manifest("database").restart).toBe("no");
+    expect(manifest("worker").restart).toBe("unless-stopped");
+  });
+
+  it("keeps disable: true and test: [NONE] as healthCheck: false, with no health path", () => {
+    const manifest = imported();
+    expect(manifest("worker").healthCheck).toBe(false);
+    expect(manifest("ntfy").healthCheck).toBe(false);
+    expect(manifest("ntfy")).not.toHaveProperty("healthCheckPath");
+    expect(manifest("ntfy").extraPorts).toEqual([{ port: 80, publish: "${NTFY_PORT:-8090}" }]);
+  });
+
+  it("declares the image's variables as ARG before FROM, with the expression's default", () => {
+    imported();
+    const dockerfile = (name: string) =>
+      readFileSync(join(dirname(serviceJson(name)), "Dockerfile"), "utf8");
+    expect(dockerfile("database")).toContain(
+      'ARG POSTGRES_VERSION=18\nFROM postgres:${POSTGRES_VERSION:-18}-alpine\nCMD ["postgres","-c","max_connections=200"]\n',
+    );
+    expect(dockerfile("worker")).toContain("ARG TAG\nFROM example/worker:${TAG}\n");
+  });
+});
+
+describe("env values that mix Compose expressions with literal text", () => {
+  it("commits them unless the name or the text could be a credential", () => {
+    tree({
+      "docker-compose.yml": [
+        "services:",
+        "  php:",
+        "    image: app:1",
+        "    environment:",
+        '      SERVER_NAME: "${SERVER_NAME:-localhost, :443}, php:80"',
+        '      DATABASE_URL: "postgres://app:${DB_PASSWORD}@database:5432/app"',
+        '      API_TOKEN: "tok-${SUFFIX}"',
+        '      BAD: "x$Y${Z}"',
+        '      MONGODB_CONNECTIONSTRING: "mongodb://${U:-app}:${P:-${ROOT:-changeme}}@mongodb:27017/eddi?authSource=eddi"',
+        '      HOOK_URL: "https://x.example.com/${PATH_PART}?token=abc"',
+      ].join("\n"),
+    });
+    applyWrites(planWrites(buildPlan(root), false));
+    const php = JSON.parse(readFileSync(serviceJson("php"), "utf8"));
+    expect(php.env).toEqual({
+      MONGODB_CONNECTIONSTRING:
+        "mongodb://${U:-app}:${P:-${ROOT:-changeme}}@mongodb:27017/eddi?authSource=eddi",
+      SERVER_NAME: "${SERVER_NAME:-localhost, :443}, php:80",
+    });
+    // A literal user (app:) or token query parameter stays secret.
+    expect(php.secrets.required.sort()).toEqual(["API_TOKEN", "BAD", "DATABASE_URL", "HOOK_URL"]);
+  });
+});
+
+describe("the Compose project name, recorded for an export", () => {
+  it("records the folder name as Compose computes it in a new project.json", () => {
+    tree({ "docker-compose.yml": "services:\n  web:\n    image: nginx:1\n" });
+    applyWrites(planWrites(buildPlan(root), false));
+    const config = JSON.parse(readFileSync(join(root, ".flisk", "project.json"), "utf8"));
+    expect(config.composeProjectNames).toEqual({ shop: "shop" });
+  });
+
+  it("records a top-level name in an existing project.json and keeps the rest", () => {
+    tree({
+      "docker-compose.yml": "name: Pl_Mail\nservices:\n  web:\n    image: nginx:1\n",
+      ".flisk/project.json": '{"version":"1.0","custom":{"a":1}}\n',
+    });
+    const plan = buildPlan(root);
+    const writes = planWrites(plan, false);
+    expect(formatPlan(plan, writes)).toContain('[add composeProjectNames.shop: "pl_mail"');
+    applyWrites(writes);
+    expect(JSON.parse(readFileSync(join(root, ".flisk", "project.json"), "utf8"))).toEqual({
+      version: "1.0",
+      custom: { a: 1 },
+      composeProjectNames: { shop: "pl_mail" },
+    });
+    expect(planWrites(buildPlan(root), false).projectConfigUpdate).toBeUndefined();
+  });
+});
+
+describe("$$ and Compose variables in a command moved into a Dockerfile (EDDI)", () => {
+  function dockerfile(compose: string) {
+    tree({ "docker-compose.yml": compose });
+    const plan = buildPlan(root);
+    const writes = planWrites(plan, false);
+    applyWrites(writes);
+    return {
+      text: formatPlan(plan, writes),
+      file: (name: string) => readFileSync(join(dirname(serviceJson(name)), "Dockerfile"), "utf8"),
+    };
+  }
+
+  it("turns $$ into $, so the container's shell reads the variable instead of its PID", () => {
+    const { file, text } = dockerfile(
+      [
+        "services:",
+        "  mongodb-app-user:",
+        "    image: mongo:7",
+        `    entrypoint: ["sh", "-c", "mongosh -u app -p \\"$$MONGO_APP_PASSWORD\\" --eval 'db.x'"]`,
+        "    restart: 'no'",
+        "  echo-home:",
+        "    image: alpine:3",
+        "    command: sh -c 'echo $$HOME'",
+      ].join("\n"),
+    );
+    expect(file("mongodb-app-user")).toContain(
+      `ENTRYPOINT ["sh","-c","mongosh -u app -p \\"$MONGO_APP_PASSWORD\\" --eval 'db.x'"]`,
+    );
+    expect(file("echo-home")).toContain('CMD ["sh","-c","echo $HOME"]');
+    expect(text).not.toContain("uses Compose variables");
+  });
+
+  it("names a command that uses Compose variables, which a Dockerfile cannot fill from .env", () => {
+    const { file, text } = dockerfile(
+      [
+        "services:",
+        "  app:",
+        "    image: alpine:3",
+        "    command: echo ${GREETING:-hi}",
+        "  list:",
+        "    image: alpine:3",
+        "    command: ['sh', '-c', 'echo ${NAME}']",
+      ].join("\n"),
+    );
+    expect(file("app")).toContain('CMD ["sh","-c","echo ${GREETING:-hi}"]');
+    expect(file("list")).toContain('CMD ["sh","-c","echo ${NAME}"]');
+    expect(text).toContain(
+      'service "app" command "echo ${GREETING:-hi}" uses Compose variables, which Compose filled from .env; in the generated Dockerfile it runs through sh -c',
+    );
+    expect(text).toContain(
+      'service "list" command ["sh","-c","echo ${NAME}"] uses Compose variables',
+    );
   });
 });

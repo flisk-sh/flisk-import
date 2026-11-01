@@ -274,6 +274,12 @@ function hostSideOf(port: number, hostIp: string | undefined, hostPort: string |
   return /^\d{1,3}(\.\d{1,3}){3}:\d+$/.test(publish) ? { publish } : undefined;
 }
 
+/** Whether a `ports:` entry names a host port ("8000:8000", "127.0.0.1:8000:8000", `published:`), not only a container port. */
+function hasHostSide(entry: unknown): boolean {
+  if (isObj(entry)) return entry.published !== undefined;
+  return typeof entry === "string" && (entry.split("/")[0] ?? "").includes(":");
+}
+
 function publishedPort(entry: unknown): ExtraPort | undefined {
   const port = containerPort(entry);
   if (port === undefined) return undefined;
@@ -343,7 +349,7 @@ function volumeOf(entry: unknown, composeDir: string): VolumeMount | undefined {
 }
 
 /** Compose's project name: top-level `name`, else the directory name, lowercased with other characters dropped. */
-function projectNameOf(root: unknown, absPath: string): string | undefined {
+export function projectNameOf(root: unknown, absPath: string): string | undefined {
   const raw =
     isObj(root) && typeof root.name === "string" && !root.name.includes("$")
       ? root.name
@@ -396,10 +402,65 @@ function envValues(environment: unknown): Record<string, string> {
   return out;
 }
 
-/** A value that is nothing but Compose interpolation, such as `${URL}` or `${PORT:-80}`. Holds no secret itself. */
-const ONLY_REFERENCES = /^(\$\{[A-Za-z_][A-Za-z0-9_]*(?::?[-?+][^}\n]*)?\})+$/;
+/** The end of the `${...}` expression that starts at `start`, nested defaults included; undefined when it is not one. */
+function expressionEnd(text: string, start: number): number | undefined {
+  if (!text.startsWith("${", start)) return undefined;
+  const name = /^[A-Za-z_][A-Za-z0-9_]*/.exec(text.slice(start + 2));
+  if (!name) return undefined;
+  let i = start + 2 + name[0].length;
+  if (text[i] === "}") return i + 1;
+  const op = /^:?[-?+]/.exec(text.slice(i));
+  if (!op) return undefined;
+  i += op[0].length;
+  while (i < text.length) {
+    if (text.startsWith("${", i)) {
+      const end = expressionEnd(text, i);
+      if (end === undefined) return undefined;
+      i = end;
+    } else if (text[i] === "}") return i + 1;
+    else if (text[i] === "\n" || text[i] === "$") return undefined;
+    else i++;
+  }
+  return undefined;
+}
 
-/** Values that are only `${VAR}` references, which service.json `env` can keep as they are (Flisk 1.4.24). */
+/**
+ * A value that is nothing but Compose interpolation: `${URL}`, `${PORT:-80}`, `${PORT-80}`, nested `${A:-${B:-file}}`.
+ * It holds no secret itself (a default is what the project's Compose file already commits), so it stays in `env`.
+ */
+export function isComposeExpression(value: string): boolean {
+  let i = 0;
+  while (i < value.length) {
+    const end = expressionEnd(value, i);
+    if (end === undefined) return false;
+    i = end;
+  }
+  return value.length > 0;
+}
+
+/**
+ * A value that mixes Compose expressions with literal text (`${SERVER_NAME:-localhost, :443}, php:80`), every `${`
+ * starting a valid expression. Undefined when it is not one; else the literal text with the expressions taken out.
+ */
+export function composeTemplateText(value: string): string | undefined {
+  if (!value.includes("${") || value.includes("\n")) return undefined;
+  let literal = "";
+  let i = 0;
+  while (i < value.length) {
+    if (value.startsWith("${", i)) {
+      const end = expressionEnd(value, i);
+      if (end === undefined) return undefined;
+      i = end;
+    } else {
+      if (value[i] === "$" && value[i + 1] !== "$") return undefined;
+      literal += value[i];
+      i++;
+    }
+  }
+  return literal;
+}
+
+/** Values with `${VAR}` references (alone or in literal text), which service.json `env` can keep as they are (Flisk 1.4.24). */
 function envReferences(environment: unknown): Record<string, string> {
   const pairs: [string, unknown][] = Array.isArray(environment)
     ? environment
@@ -410,7 +471,7 @@ function envReferences(environment: unknown): Record<string, string> {
       : [];
   const out: Record<string, string> = {};
   for (const [key, raw] of pairs) {
-    if (typeof raw === "string" && ONLY_REFERENCES.test(raw)) out[key] = raw;
+    if (typeof raw === "string" && composeTemplateText(raw) !== undefined) out[key] = raw;
   }
   return out;
 }
@@ -477,25 +538,68 @@ export function shellWords(text: string): string[] | undefined {
  * into words as Compose splits it, with no shell, so an image ENTRYPOINT (minio) gets `server /export` as its arguments.
  * Only a string that cannot be split, or that reads `$VAR` at run time, runs through `sh -c`; `shell` says why.
  */
-function containerCommandOf(command: unknown): { argv: string[]; shell?: string } | undefined {
+function containerCommandOf(command: unknown): { argv: string[]; note?: string } | undefined {
   if (typeof command === "string" && command.trim()) {
-    if (command.includes("$")) return { argv: ["sh", "-c", command], shell: "uses $ variables" };
-    const words = shellWords(command);
+    const { text, interpolates } = unescapeDollars(command);
+    if (interpolates)
+      return {
+        argv: ["sh", "-c", text],
+        note: "uses Compose variables, which Compose filled from .env; in the generated Dockerfile it runs through sh -c, so the container's shell fills them from its own environment",
+      };
+    const words = shellWords(text);
     return words?.length
       ? { argv: words }
-      : { argv: ["sh", "-c", command], shell: "has unbalanced quotes" };
+      : {
+          argv: ["sh", "-c", text],
+          note: "has unbalanced quotes; it runs through sh -c, which Compose would not do",
+        };
   }
-  if (Array.isArray(command) && command.length > 0 && command.every((c) => typeof c === "string"))
-    return { argv: command as string[] };
+  if (Array.isArray(command) && command.length > 0 && command.every((c) => typeof c === "string")) {
+    const parts = (command as string[]).map(unescapeDollars);
+    return {
+      argv: parts.map((p) => p.text),
+      ...(parts.some((p) => p.interpolates)
+        ? {
+            note: "uses Compose variables, which Compose filled from .env; the generated Dockerfile passes them as written (a sh -c argument fills them from the container's environment)",
+          }
+        : {}),
+    };
+  }
   return undefined;
 }
 
-/** Seconds from a Compose duration such as `30s` or `2m`; undefined for anything it cannot read exactly. */
+/**
+ * A Compose command as the container sees it: `$$` is Compose's escape for a literal `$` (so `$$PASSWORD` reaches the
+ * container's shell as `$PASSWORD`). `interpolates` says whether a single `$` (`${VAR}`, `$VAR`) asks Compose to fill
+ * a value from .env, which a Dockerfile cannot do.
+ */
+function unescapeDollars(value: string): { text: string; interpolates: boolean } {
+  let text = "";
+  let interpolates = false;
+  for (let i = 0; i < value.length; i++) {
+    if (value[i] === "$" && value[i + 1] === "$") {
+      text += "$";
+      i++;
+      continue;
+    }
+    if (value[i] === "$" && /[{A-Za-z_]/.test(value[i + 1] ?? "")) interpolates = true;
+    text += value[i];
+  }
+  return { text, interpolates };
+}
+
+const DURATION_UNIT: Record<string, number> = { h: 3600, m: 60, s: 1, ms: 0.001, us: 0.000001 };
+
+/** Seconds from a Compose duration such as `30s`, `2m` or `1m30s`; undefined for anything it cannot read exactly. */
 function secondsOf(value: unknown): number | undefined {
   if (typeof value === "number" && value > 0) return value;
-  const match = typeof value === "string" ? value.match(/^(\d+)(s|m)?$/) : null;
-  if (!match) return undefined;
-  const seconds = Number(match[1]) * (match[2] === "m" ? 60 : 1);
+  if (typeof value !== "string") return undefined;
+  if (/^\d+$/.test(value)) return Number(value) > 0 ? Number(value) : undefined;
+  if (!DURATION.test(value)) return undefined;
+  let seconds = 0;
+  for (const [, amount, unit] of value.matchAll(/([0-9]+(?:\.[0-9]+)?)(h|ms|us|m|s)/g))
+    seconds += Number(amount) * (DURATION_UNIT[unit as string] as number);
+  seconds = Math.round(seconds * 1000) / 1000;
   return seconds > 0 ? seconds : undefined;
 }
 
@@ -513,6 +617,7 @@ function healthProbeOf(healthcheck: unknown): HealthCheckProbe | undefined {
   if (!command) return undefined;
   const interval = secondsOf(healthcheck.interval);
   const timeout = secondsOf(healthcheck.timeout);
+  const startPeriod = secondsOf(healthcheck.start_period);
   const retries =
     typeof healthcheck.retries === "number" &&
     Number.isInteger(healthcheck.retries) &&
@@ -524,6 +629,7 @@ function healthProbeOf(healthcheck: unknown): HealthCheckProbe | undefined {
     ...(interval ? { interval } : {}),
     ...(timeout ? { timeout } : {}),
     ...(retries ? { retries } : {}),
+    ...(startPeriod ? { startPeriod } : {}),
   };
 }
 
@@ -757,13 +863,18 @@ registerDetector({
         ["command", commandArgs],
         ["entrypoint", entrypointArgs],
       ] as const) {
-        if (args?.shell)
+        if (args?.note)
           skips.push({
             ...base,
-            reason: `service "${name}" ${key} ${JSON.stringify(raw[key])} ${args.shell}; it runs through sh -c, which Compose would not do`,
+            reason: `service "${name}" ${key} ${JSON.stringify(raw[key])} ${args.note}`,
           });
       }
-      const healthProbe = healthProbeOf(raw.healthcheck);
+      // `disable: true` or `test: ["NONE"]` turns off the image's own HEALTHCHECK too, so it is kept as healthCheck: false.
+      const healthOff =
+        isObj(raw.healthcheck) &&
+        (raw.healthcheck.disable === true ||
+          (Array.isArray(raw.healthcheck.test) && raw.healthcheck.test[0] === "NONE"));
+      const healthProbe = healthOff ? false : healthProbeOf(raw.healthcheck);
       const envKeys = envNames(raw.environment);
       const env = envValues(raw.environment);
       const envRefs = envReferences(raw.environment);
@@ -809,11 +920,14 @@ registerDetector({
           reason: `service "${name}" ${key} ${JSON.stringify(raw[key])} has values Flisk does not accept; not used`,
         });
       }
-      // Every published port Flisk does not route stays published on the same host address (service.json extraPorts).
+      // Every published port stays published on the same host address (service.json extraPorts). The routed port too,
+      // when Compose gives it a host side ("${APP_PORT:-8000}:8000"), so the app is still reachable without Traefik
+      // (and in an exported docker-compose.yml); a bare routed "8000" is reached through Traefik only.
       const proxied = selectedPort !== undefined && !NON_HTTP_PORTS.has(selectedPort);
       const extraPorts = (Array.isArray(raw.ports) ? raw.ports : [])
+        .filter((entry) => containerPort(entry) !== selectedPort || !proxied || hasHostSide(entry))
         .map(publishedPort)
-        .filter((p): p is ExtraPort => p !== undefined && (p.port !== selectedPort || !proxied));
+        .filter((p): p is ExtraPort => p !== undefined);
       let sidecarOf: string | undefined;
       if (raw.network_mode !== undefined) {
         const mode = typeof raw.network_mode === "string" ? raw.network_mode : "";
@@ -876,7 +990,7 @@ registerDetector({
         ...(models ? { models } : {}),
         ...(profiles ? { profiles } : {}),
         ...(envFile ? { envFile } : {}),
-        ...(healthProbe ? { healthCheck: healthProbe } : {}),
+        ...(healthProbe !== undefined ? { healthCheck: healthProbe } : {}),
         ...(selectedPort !== undefined ? { port: selectedPort } : {}),
         ...(healthCheckPath ? { healthCheckPath } : {}),
         exposeViaProxy,
@@ -888,7 +1002,8 @@ registerDetector({
         ...(extraPorts.length ? { extraPorts } : {}),
         ...(sidecarOf ? { sidecarOf } : {}),
         ...(volumes.length ? { volumes } : {}),
-        ...(restart ? { restart } : {}),
+        // Compose restarts nothing unless asked; Flisk defaults to unless-stopped, so "no" is written.
+        ...(restart ? { restart } : raw.restart === undefined ? { restart: "no" as const } : {}),
         confidence: "high",
         sources: [base],
       });

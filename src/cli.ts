@@ -66,12 +66,16 @@ const program = new Command("flisk-import")
     console.log(
       `\nWrote ${written.length} service.json file(s)${writes.projectConfig ? " and created .flisk/project.json" : ""}.`,
     );
-    const envFile = relative(process.cwd(), join(writes.projectRoot, ".env")) || ".env";
+    const envFile = relative(process.cwd(), writes.env.path) || ".env";
     console.log("\nNext:");
     const copied = Object.keys(writes.env.add);
     if (copied.length)
       console.log(
         `  - Copied ${copied.length} environment value(s) from docker-compose.yml to ${envFile} (gitignored).`,
+      );
+    if (writes.env.tracked && copied.length)
+      console.log(
+        `  - ${writes.env.tracked} is tracked by git, so it was left as it is and not added to .gitignore; the values went to ${envFile}, which each service that needs them reads as envFile.`,
       );
     if (writes.items.some((item) => item.notes.some((note) => note.startsWith("no literal value"))))
       console.log(`  - Add the values listed above as missing to ${envFile}.`);

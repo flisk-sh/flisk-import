@@ -107,9 +107,10 @@ describe.each(names)("corpus: %s", (name) => {
         expect(Object.keys(written), `${svc} depends on a service that was not written`).toContain(
           dep,
         );
-      // An unresolved Compose variable must never reach a value Flisk copies into generated config, except an image's
-      // ${NAME} / ${NAME:-default}, which Flisk core resolves (checked against IMAGE above).
-      const { $schema: _schema, image: _image, ...fields } = m;
+      // An unresolved Compose variable must never reach a value Flisk copies into generated config, except where Flisk
+      // core resolves it: an image's ${NAME} / ${NAME:-default} (checked against IMAGE above), `env` values and a
+      // published port's `publish`.
+      const { $schema: _schema, image: _image, env: _env, extraPorts: _ports, ...fields } = m;
       expect(JSON.stringify(fields), svc).not.toContain("$");
     }
 

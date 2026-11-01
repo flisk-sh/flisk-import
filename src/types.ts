@@ -34,7 +34,7 @@ export interface Candidate {
   /** Compose `models` the service uses (Docker Model Runner): the top-level name and the model reference. */
   models?: ModelRef[];
   /** Compose `healthcheck` as a probe command that exits 0 when the service is ready. */
-  healthCheck?: HealthCheckProbe;
+  healthCheck?: HealthCheckProbe | false;
   /** The port the service listens on inside its container, as stated by the source. */
   port?: number;
   /** HTTP path found in a Compose healthcheck, when it uses an explicit URL. */
@@ -78,6 +78,8 @@ export interface HealthCheckProbe {
   interval?: number;
   timeout?: number;
   retries?: number;
+  /** Seconds before failed probes count (Compose start_period). */
+  startPeriod?: number;
 }
 
 export interface ContainerOptions {
