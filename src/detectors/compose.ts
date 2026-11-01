@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, normalize } from "node:path/posix";
 import { isAlias, isMap, type Node, parseDocument, visit } from "yaml";
@@ -159,7 +160,8 @@ function networkAliasesOf(value: unknown): { kept: string[]; bad: unknown[] } {
       else bad.push(alias);
     }
   }
-  return { kept: [...new Set(kept)], bad };
+  // Sorted, so the YAML reader and docker compose config (which sorts networks) give the same list.
+  return { kept: [...new Set(kept)].sort(), bad };
 }
 
 /** stop_grace_period, network aliases, extra_hosts and ulimits, and a line for each value that is not carried over. */
@@ -274,9 +276,46 @@ function hostSideOf(port: number, hostIp: string | undefined, hostPort: string |
   return /^\d{1,3}(\.\d{1,3}){3}:\d+$/.test(publish) ? { publish } : undefined;
 }
 
+/**
+ * The project as `docker compose config` resolves it (include, extends, merges, anchors), with ${VAR} templates and env
+ * files left as written. Undefined when docker compose is not available, fails, or FLISK_IMPORT_DOCKER=0.
+ */
+function composeConfigOf(absPath: string): Obj | undefined {
+  if (process.env.FLISK_IMPORT_DOCKER === "0") return undefined;
+  try {
+    const out = execFileSync(
+      "docker",
+      [
+        "compose",
+        "--profile",
+        "*",
+        "-f",
+        absPath,
+        "config",
+        "--no-interpolate",
+        "--no-env-resolution",
+        // Paths stay as written in the root file; an included file's are rebased onto the project directory.
+        "--no-path-resolution",
+        "--format",
+        "json",
+      ],
+      {
+        cwd: dirname(absPath),
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "ignore"],
+        timeout: 60_000,
+      },
+    );
+    const config = JSON.parse(out) as unknown;
+    return isObj(config) ? config : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /** Whether a `ports:` entry names a host port ("8000:8000", "127.0.0.1:8000:8000", `published:`), not only a container port. */
 function hasHostSide(entry: unknown): boolean {
-  if (isObj(entry)) return entry.published !== undefined;
+  if (isObj(entry)) return entry.published !== undefined && entry.published !== "";
   return typeof entry === "string" && (entry.split("/")[0] ?? "").includes(":");
 }
 
@@ -286,7 +325,8 @@ function publishedPort(entry: unknown): ExtraPort | undefined {
   let protocol: "tcp" | "udp" = "tcp";
   let hostSide: ReturnType<typeof hostSideOf>;
   if (isObj(entry)) {
-    const published = entry.published === undefined ? undefined : String(entry.published);
+    const published =
+      entry.published === undefined || entry.published === "" ? undefined : String(entry.published);
     const hostIp = typeof entry.host_ip === "string" ? entry.host_ip : undefined;
     if (entry.protocol === "udp") protocol = "udp";
     hostSide = hostSideOf(port, hostIp, published);
@@ -313,6 +353,13 @@ function publishedPort(entry: unknown): ExtraPort | undefined {
     ...(hostSide ?? {}),
     ...(protocol === "udp" ? { protocol } : {}),
   };
+}
+
+/** A volume entry in short form for the plan, also when docker compose config wrote it in long form. */
+function volumeText(entry: unknown): unknown {
+  if (!isObj(entry) || typeof entry.target !== "string") return entry;
+  const source = typeof entry.source === "string" && entry.source ? `${entry.source}:` : "";
+  return `${source}${entry.target}${entry.read_only === true ? ":ro" : ""}`;
 }
 
 /** One `volumes:` entry. Bind sources are resolved against the Compose file's directory. */
@@ -763,9 +810,23 @@ registerDetector({
         reason: "uses YAML anchors/aliases; values were read after resolution",
       });
     }
-    const root = doc.toJS() as unknown;
+    const rawRoot = doc.toJS() as unknown;
+    // `docker compose config` resolves include, extends and merges as `docker compose up` does; the YAML is the fallback.
+    const resolved = composeConfigOf(absPath);
+    const root = resolved ?? rawRoot;
+    const resolves =
+      isObj(rawRoot) &&
+      (rawRoot.include !== undefined ||
+        (isObj(rawRoot.services) &&
+          Object.values(rawRoot.services).some((s) => isObj(s) && s.extends !== undefined)));
+    if (!resolved && resolves)
+      skips.push({
+        ...base,
+        reason:
+          "uses include or extends, which only `docker compose config` resolves; docker compose was not available (or failed), so the file was read as YAML",
+      });
     const services = isObj(root) && isObj(root.services) ? root.services : null;
-    if (!services || !isMap(doc.get("services", true))) {
+    if (!services || (!resolved && !isMap(doc.get("services", true)))) {
       return { candidates, skips: [...skips, { ...base, reason: "no `services:` map" }] };
     }
 
@@ -962,7 +1023,7 @@ registerDetector({
         else
           skips.push({
             ...base,
-            reason: `service "${name}" volume ${JSON.stringify(entry)} is not translated (an anonymous volume, a path outside the imported directory, or Compose variables); not mounted`,
+            reason: `service "${name}" volume ${JSON.stringify(volumeText(entry))} is not translated (an anonymous volume, a path outside the imported directory, or Compose variables); not mounted`,
           });
       }
       // `on-failure:5` caps the retries at 5; service.json keeps the cap (1 to 100).

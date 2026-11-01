@@ -1466,3 +1466,104 @@ describe("$$ and Compose variables in a command moved into a Dockerfile (EDDI)",
     );
   });
 });
+
+describe("include and extends, resolved through docker compose config (wger)", () => {
+  const files = {
+    "docker-compose.yml": [
+      "services:",
+      "  web:",
+      "    image: docker.io/wger/server:latest",
+      "    depends_on:",
+      "      db: { condition: service_healthy }",
+      "      cache: { condition: service_healthy }",
+      "  powersync:",
+      "    depends_on:",
+      "      db: { condition: service_healthy }",
+      "  nginx:",
+      "    image: docker.io/nginx:stable",
+      "    ports: ['80:80']",
+      "    volumes: ['./config/nginx.conf:/etc/nginx/conf.d/default.conf']",
+      "  worker:",
+      "    extends: { file: services/redis.yaml, service: cache }",
+      "    command: ['redis-server', '--port', '6380']",
+      "include:",
+      "  - path: ./services/postgres.yaml",
+      "  - path: ./services/powersync.yaml",
+      "  - path: ./services/redis.yaml",
+    ].join("\n"),
+    "services/postgres.yaml":
+      "services:\n  db:\n    image: docker.io/postgres:15-alpine\n    env_file: [../config/prod.env]\n    volumes: [postgres-data:/var/lib/postgresql/data]\nvolumes:\n  postgres-data:\n",
+    "services/powersync.yaml":
+      "services:\n  powersync:\n    image: docker.io/journeyapps/powersync-service:latest\n    volumes: ['./config-powersync:/config:ro']\n",
+    "services/redis.yaml": "services:\n  cache:\n    image: docker.io/redis:7\n",
+    "config/prod.env": "SECRET_KEY=x\n",
+    "config/nginx.conf": "",
+    "services/config-powersync/powersync.yaml": "",
+  };
+  const hasDocker = (() => {
+    try {
+      execFileSync("docker", ["compose", "version"], { stdio: "ignore" });
+      return true;
+    } catch {
+      return false;
+    }
+  })();
+
+  it("falls back to the YAML reader, and says so, when docker compose is not used", () => {
+    const before = process.env.FLISK_IMPORT_DOCKER;
+    process.env.FLISK_IMPORT_DOCKER = "0";
+    try {
+      tree(files);
+      const plan = buildPlan(root);
+      const text = formatPlan(plan, planWrites(plan, false));
+      expect(text).toContain(
+        "uses include or extends, which only `docker compose config` resolves; docker compose was not available (or failed), so the file was read as YAML",
+      );
+      expect(text).toContain(
+        "not written: powersync: Compose gives it neither `image` nor a usable `build`",
+      );
+    } finally {
+      if (before === undefined) delete process.env.FLISK_IMPORT_DOCKER;
+      else process.env.FLISK_IMPORT_DOCKER = before;
+    }
+  });
+
+  it.runIf(hasDocker && process.env.FLISK_IMPORT_DOCKER !== "0")(
+    "imports included and extended services with their own paths",
+    () => {
+      tree(files);
+      const plan = buildPlan(root);
+      const writes = planWrites(plan, false);
+      applyWrites(writes);
+      const manifest = (name: string) => JSON.parse(readFileSync(serviceJson(name), "utf8"));
+      expect(writes.rejected).toEqual([]);
+      expect(manifest("db")).toMatchObject({
+        image: "docker.io/postgres:15-alpine",
+        envFile: ["../../../config/prod.env"],
+        volumes: [{ source: "postgres-data", target: "/var/lib/postgresql/data" }],
+      });
+      expect(manifest("cache").image).toBe("docker.io/redis:7");
+      expect(manifest("powersync")).toMatchObject({
+        image: "docker.io/journeyapps/powersync-service:latest",
+        dependsOn: ["db"],
+        volumes: [{ source: "../../config-powersync", target: "/config", readOnly: true }],
+      });
+      expect(manifest("nginx").volumes).toEqual([
+        { source: "../../../config/nginx.conf", target: "/etc/nginx/conf.d/default.conf" },
+      ]);
+      expect(manifest("nginx").extraPorts).toEqual([{ port: 80, bind: "0.0.0.0" }]);
+      expect(manifest("web").dependsOn).toEqual(["cache", "db"]);
+      // extends: the worker gets the cache image and its own command.
+      expect(readFileSync(join(dirname(serviceJson("worker")), "Dockerfile"), "utf8")).toContain(
+        'FROM docker.io/redis:7\nCMD ["redis-server","--port","6380"]\n',
+      );
+      // Nothing config adds by default leaks into service.json.
+      for (const name of ["db", "cache", "powersync", "nginx", "web"]) {
+        const text = JSON.stringify(manifest(name));
+        expect(text).not.toContain("create_host_path");
+        expect(text).not.toContain('"required"');
+        expect(text).not.toContain(root);
+      }
+    },
+  );
+});
