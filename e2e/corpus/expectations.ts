@@ -105,12 +105,11 @@ export const EXPECTATIONS: Record<string, Expectation> = {
     },
   },
   "interpolated-image": {
-    services: { api: { without: ["dependsOn"] } },
-    notWritten: ["db"],
-    plan: [
-      'image "postgres:${PG_VERSION:-16}" uses Compose variables',
-      "dependsOn not written, not in this import: db",
-    ],
+    services: {
+      api: { match: { dependsOn: ["db"] } },
+      db: svc({ match: { image: "postgres:${PG_VERSION:-16}" } }, privateSvc),
+    },
+    plan: ["image:     postgres:${PG_VERSION:-16}"],
   },
   "interpolated-port": {
     services: { app: privateSvc },

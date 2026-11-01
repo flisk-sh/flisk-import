@@ -61,7 +61,8 @@ export interface Candidate {
   sidecarOf?: string;
   /** Named volumes and bind mounts, as service.json `volumes` (flisk#1748). Bind sources are relative to the import root. */
   volumes?: VolumeMount[];
-  restart?: "no" | "on-failure" | "unless-stopped" | "always";
+  /** A Compose restart policy; `on-failure:N` keeps its retry limit (N from 1 to 100). */
+  restart?: "no" | "on-failure" | "unless-stopped" | "always" | `on-failure:${number}`;
   confidence: Confidence;
   sources: Source[];
 }
@@ -92,6 +93,14 @@ export interface ContainerOptions {
   /** Compose deploy.resources.limits. */
   cpus?: number | string;
   memory?: string;
+  /** Compose stop_grace_period, a duration such as 30s, 1m30s or 500ms. */
+  stopGracePeriod?: string;
+  /** Other DNS names for this service on its network: Compose `networks.<net>.aliases`, and a renamed service's Compose name. */
+  networkAliases?: string[];
+  /** Compose extra_hosts, each `name:address` (an IP or host-gateway). */
+  extraHosts?: string[];
+  /** Compose ulimits: a number, or a soft and a hard limit. */
+  ulimits?: Record<string, number | { soft: number; hard: number }>;
 }
 
 export interface ExtraPort {

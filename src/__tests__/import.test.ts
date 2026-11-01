@@ -212,26 +212,52 @@ describe("Compose values Flisk cannot take as they are", () => {
     );
   });
 
-  it("does not write an interpolated image, and drops dependencies on it", () => {
+  it("writes an image with ${NAME} and ${NAME:-default} variables as it is", () => {
+    const { writes, manifest } = plan(
+      [
+        "services:",
+        "  db:",
+        "    image: postgres:${POSTGRES_VERSION:-18}-alpine",
+        "  api:",
+        "    image: ghcr.io/x/y:${VERSION}",
+        "  web:",
+        "    image: nginx:${NGINX_TAG-1.27}",
+        "    ports: ['${CODECOV_PORT-8080}:8080', '9000:9000']",
+      ].join("\n"),
+    );
+    expect(writes.rejected).toEqual([]);
+    expect(manifest("web").image).toBe("nginx:${NGINX_TAG-1.27}");
+    expect(manifest("web").extraPorts).toContainEqual({
+      port: 8080,
+      publish: "${CODECOV_PORT-8080}",
+    });
+    expect(manifest("db").image).toBe("postgres:${POSTGRES_VERSION:-18}-alpine");
+    expect(manifest("api").image).toBe("ghcr.io/x/y:${VERSION}");
+  });
+
+  it("does not write an image with other variable forms or characters, and drops dependencies on it", () => {
     const { writes, manifest, text } = plan(
       [
         "services:",
         "  api:",
         "    image: example/api:1",
         "    ports: ['4000:4000']",
-        "    depends_on: [db]",
+        "    depends_on: [db, cache, web]",
         "  db:",
-        "    image: postgres:${PG_VERSION:-16}",
-        "    ports: ['5432:5432']",
+        "    image: postgres:$PG_VERSION",
+        "  cache:",
+        "    image: 'redis:${TAG:?set TAG}'",
+        "  web:",
+        '    image: "nginx:1\\n  privileged: true"',
       ].join("\n"),
     );
     expect(writes.items.map((i) => i.service.name)).toEqual(["api"]);
-    expect(writes.rejected[0]).toMatchObject({ name: "db" });
+    expect(writes.rejected.map((r) => r.name).sort()).toEqual(["cache", "db", "web"]);
     expect(text).toContain(
-      'not written: db: image "postgres:${PG_VERSION:-16}" uses Compose variables',
+      'not written: db: image "postgres:$PG_VERSION" has characters Flisk does not accept (Compose variables may only be ${NAME}, ${NAME:-default} or ${NAME-default})',
     );
     expect(manifest("api")).not.toHaveProperty("dependsOn");
-    expect(text).toContain("dependsOn not written, not in this import: db");
+    expect(text).toContain("dependsOn not written, not in this import: cache, db, web");
   });
 
   it("does not use a health path Flisk rejects", () => {
@@ -750,15 +776,15 @@ describe("Compose command, healthcheck, ports and restart", () => {
     expect(manifest("migrate")).toMatchObject({ buildContext: ".", dockerfile: "Dockerfile" });
     expect(manifest("migrate")).not.toHaveProperty("image");
     expect(readFileSync(join(dirname(serviceJson("migrate")), "Dockerfile"), "utf8")).toContain(
-      'FROM example/app:1\nCMD ["sh","-c","bundle exec rails db:prepare"]\n',
+      'FROM example/app:1\nCMD ["bundle","exec","rails","db:prepare"]\n',
     );
     expect(readFileSync(join(dirname(serviceJson("worker")), "Dockerfile"), "utf8")).toContain(
       'CMD ["bundle","exec","sidekiq"]',
     );
   });
 
-  it("keeps on-failure without its retry limit", () => {
-    expect(written()("worker").restart).toBe("on-failure");
+  it("keeps on-failure with its retry limit", () => {
+    expect(written()("worker").restart).toBe("on-failure:5");
   });
 
   it("keeps a published database port and writes its healthcheck as a probe command", () => {
@@ -852,5 +878,244 @@ describe("Compose command, healthcheck, ports and restart", () => {
       memory: "2G",
     });
     expect(formatPlan(plan, writes)).toContain("deploy.resources.reservations is not carried over");
+  });
+});
+
+describe("Compose stop_grace_period, network aliases, extra_hosts, ulimits and container_name", () => {
+  function imported(compose: string) {
+    tree({ "docker-compose.yml": compose });
+    const plan = buildPlan(root);
+    const writes = planWrites(plan, false);
+    applyWrites(writes);
+    return {
+      text: formatPlan(plan, writes),
+      writes,
+      manifest: (name: string) => JSON.parse(readFileSync(serviceJson(name), "utf8")),
+    };
+  }
+
+  it("keeps a pl_mail worker's alias, stop_grace_period and variable image", () => {
+    const { manifest, text } = imported(
+      [
+        "services:",
+        "  worker:",
+        "    image: postgres:${POSTGRES_VERSION:-18}-alpine",
+        "    stop_grace_period: 30s",
+        "    networks:",
+        "      default:",
+        "        aliases: [mercure]",
+      ].join("\n"),
+    );
+    expect(manifest("worker")).toMatchObject({
+      image: "postgres:${POSTGRES_VERSION:-18}-alpine",
+      container: { stopGracePeriod: "30s", networkAliases: ["mercure"] },
+    });
+    expect(text).not.toContain("keys not translated");
+  });
+
+  it("reads aliases from every network and accepts 1m30s and 500ms", () => {
+    const { manifest } = imported(
+      [
+        "services:",
+        "  api:",
+        "    image: app:1",
+        "    stop_grace_period: 1m30s",
+        "    networks:",
+        "      front: { aliases: [api.local, api_v1] }",
+        "      back:",
+        "        aliases: [api_v1, internal-api]",
+        "      other:",
+        "  web:",
+        "    image: app:1",
+        "    stop_grace_period: 500ms",
+        "    networks: [front]",
+        "networks: { front: {}, back: {}, other: {} }",
+      ].join("\n"),
+    );
+    expect(manifest("api").container).toEqual({
+      stopGracePeriod: "1m30s",
+      networkAliases: ["api.local", "api_v1", "internal-api"],
+    });
+    expect(manifest("web").container).toEqual({ stopGracePeriod: "500ms" });
+  });
+
+  it("keeps a renamed Lychee service's Compose name as a network alias", () => {
+    const { manifest, writes, text } = imported(
+      [
+        "services:",
+        "  lychee_api:",
+        "    image: ghcr.io/lycheeorg/lychee:latest",
+        "    ports: ['8000:8000']",
+        "    environment:",
+        "      DB_HOST: lychee_db:3306",
+        "    depends_on: [lychee_db]",
+        "  lychee_db:",
+        "    image: mariadb:11",
+        "    networks:",
+        "      default: { aliases: [db] }",
+        "  web:",
+        "    image: nginx:1",
+        "    environment:",
+        "      API_URL: http://lychee_api:8000",
+        "    depends_on: [lychee_api]",
+      ].join("\n"),
+    );
+    expect(manifest("lychee-api").container).toEqual({ networkAliases: ["lychee_api"] });
+    expect(manifest("lychee-db").container).toEqual({ networkAliases: ["db", "lychee_db"] });
+    expect(manifest("lychee-api").env).toEqual({ DB_HOST: "lychee_db:3306" });
+    expect(manifest("web").env).toEqual({ API_URL: "http://lychee_api:8000" });
+    expect(manifest("web")).not.toHaveProperty("container");
+    expect(writes.items.find((i) => i.service.name === "lychee-api")?.notes).toContain(
+      'network alias "lychee_api" keeps the Compose name, so other services that call it by that name still reach it',
+    );
+    expect(text).toContain('renamed from "lychee_db"');
+  });
+
+  it("gives a renamed sidecar no aliases, since it shares another service's network", () => {
+    const { manifest, text } = imported(
+      [
+        "services:",
+        "  vpn:",
+        "    image: qmcgaw/gluetun:v3",
+        "  dl_client:",
+        "    image: example/dl:1",
+        "    network_mode: service:vpn",
+        "    networks: { default: { aliases: [dl] } }",
+      ].join("\n"),
+    );
+    expect(manifest("dl-client")).not.toHaveProperty("container");
+    expect(manifest("dl-client").sidecarOf).toBe("vpn");
+    expect(text).toContain(
+      `network aliases not written (dl, dl_client): a sidecar shares "vpn"'s network`,
+    );
+  });
+
+  it("keeps EDDI's extra_hosts and open-mercato's ulimits", () => {
+    const { manifest } = imported(
+      [
+        "services:",
+        "  eddi:",
+        "    image: labsai/eddi:latest",
+        '    extra_hosts: ["host.docker.internal:host-gateway"]',
+        "    ulimits:",
+        "      nofile: { soft: 65536, hard: 65536 }",
+        "      nproc: 65535",
+        "  mercato:",
+        "    image: open-mercato/app:1",
+        "    extra_hosts:",
+        "      db.internal: 10.0.0.5",
+        "      v6host: '::1'",
+        "  other:",
+        "    image: app:1",
+        "    extra_hosts: ['api=192.168.1.2', 'myhostv6:::1', 'api:192.168.1.2']",
+      ].join("\n"),
+    );
+    expect(manifest("eddi").container).toEqual({
+      extraHosts: ["host.docker.internal:host-gateway"],
+      ulimits: { nofile: { soft: 65536, hard: 65536 }, nproc: 65535 },
+    });
+    expect(manifest("mercato").container).toEqual({
+      extraHosts: ["db.internal:10.0.0.5", "v6host:::1"],
+    });
+    expect(manifest("other").container).toEqual({
+      extraHosts: ["api:192.168.1.2", "myhostv6:::1"],
+    });
+  });
+
+  it("names values it cannot carry over and writes none of them", () => {
+    const { manifest, text } = imported(
+      [
+        "services:",
+        "  api:",
+        "    image: app:1",
+        "    stop_grace_period: soon",
+        "    networks:",
+        '      default: { aliases: ["bad alias", "ok"] }',
+        '    extra_hosts: ["evil\\nkey: 1:1.2.3.4", "name:not-an-ip", "host.docker.internal:host-gateway"]',
+        "    ulimits:",
+        "      nofile: { soft: 10, hard: 5 }",
+        "      NPROC: 5",
+        "      core: unlimited",
+        "      memlock: { soft: -1, hard: -1 }",
+      ].join("\n"),
+    );
+    expect(manifest("api").container).toEqual({
+      networkAliases: ["ok"],
+      extraHosts: ["host.docker.internal:host-gateway"],
+      ulimits: { memlock: { soft: -1, hard: -1 } },
+    });
+    expect(text).toContain('stop_grace_period "soon" is not a duration');
+    expect(text).toContain('network aliases ["bad alias"] are not DNS names');
+    expect(text).toContain('extra_hosts ["evil\\nkey: 1:1.2.3.4","name:not-an-ip"] are not');
+    expect(text).toContain("ulimits nofile, NPROC, core are not a whole number");
+  });
+
+  it("drops container_name with a note, not as an untranslated key", () => {
+    const { manifest, text } = imported(
+      "services:\n  db:\n    image: postgres:16\n    container_name: lychee_db\n",
+    );
+    expect(manifest("db")).not.toHaveProperty("container");
+    expect(text).toContain('container_name "lychee_db" is dropped: Flisk names containers itself');
+    expect(text).not.toContain("keys not translated");
+  });
+
+  it("refuses an on-failure limit outside 1 to 100", () => {
+    const { manifest, text } = imported(
+      "services:\n  zero:\n    image: app:1\n    restart: on-failure:0\n  many:\n    image: app:1\n    restart: on-failure:101\n  max:\n    image: app:1\n    restart: on-failure:100\n",
+    );
+    expect(manifest("zero")).not.toHaveProperty("restart");
+    expect(manifest("many")).not.toHaveProperty("restart");
+    expect(manifest("max").restart).toBe("on-failure:100");
+    expect(text).toContain('restart "on-failure:101" is not a policy Flisk accepts');
+  });
+});
+
+describe("Compose command and entrypoint strings, split as Compose splits them", () => {
+  function dockerfile(compose: string) {
+    tree({ "docker-compose.yml": compose });
+    const plan = buildPlan(root);
+    const writes = planWrites(plan, false);
+    applyWrites(writes);
+    return {
+      text: formatPlan(plan, writes),
+      file: (name: string) => readFileSync(join(dirname(serviceJson(name)), "Dockerfile"), "utf8"),
+    };
+  }
+
+  it("writes codecov's minio `command: server /export` as exec-form arguments to the image ENTRYPOINT", () => {
+    const { file } = dockerfile(
+      "services:\n  minio:\n    image: minio/minio:RELEASE.2020-04-15T00-39-01Z\n    command: server /export\n",
+    );
+    expect(file("minio")).toContain('CMD ["server","/export"]\n');
+    expect(file("minio")).not.toContain("sh");
+  });
+
+  it("splits quotes and backslashes like a shell", () => {
+    const { file } = dockerfile(
+      [
+        "services:",
+        "  api:",
+        "    image: app:1",
+        `    entrypoint: /bin/run --name "my app" 'a b' c\\ d`,
+        `    command: echo "say \\"hi\\"" ''`,
+      ].join("\n"),
+    );
+    expect(file("api")).toContain('ENTRYPOINT ["/bin/run","--name","my app","a b","c d"]\n');
+    expect(file("api")).toContain('CMD ["echo","say \\"hi\\"",""]\n');
+  });
+
+  it("keeps a list form as it is", () => {
+    const { file } = dockerfile(
+      "services:\n  worker:\n    image: app:1\n    command: ['sh', '-c', 'a && b']\n",
+    );
+    expect(file("worker")).toContain('CMD ["sh","-c","a && b"]\n');
+  });
+
+  it("falls back to sh -c for a string it cannot split, and says so", () => {
+    const { file, text } = dockerfile(
+      `services:\n  bad:\n    image: app:1\n    command: echo "unbalanced\n`,
+    );
+    expect(file("bad")).toContain('CMD ["sh","-c","echo \\"unbalanced"]\n');
+    expect(text).toContain("has unbalanced quotes; it runs through sh -c");
   });
 });
