@@ -1530,6 +1530,34 @@ describe("include and extends, resolved through docker compose config (wger)", (
   });
 
   it.runIf(hasDocker && process.env.FLISK_IMPORT_DOCKER !== "0")(
+    "imports a service that only an included file defines, and resolves extends",
+    () => {
+      tree({
+        "docker-compose.yml":
+          "include:\n  - path: ./services/postgres.yaml\nservices:\n  web:\n    extends: { file: services/base.yaml, service: base }\n    depends_on: [db]\n",
+        "services/postgres.yaml":
+          "services:\n  db:\n    image: docker.io/postgres:15-alpine\n    volumes: ['./initdb:/docker-entrypoint-initdb.d:ro']\n",
+        "services/base.yaml":
+          "services:\n  base:\n    image: docker.io/wger/server:latest\n    stop_grace_period: 60s\n",
+        "services/initdb/01.sql": "",
+      });
+      const plan = buildPlan(root);
+      const writes = planWrites(plan, false);
+      applyWrites(writes);
+      const manifest = (name: string) => JSON.parse(readFileSync(serviceJson(name), "utf8"));
+      expect(writes.rejected).toEqual([]);
+      expect(manifest("db").volumes).toEqual([
+        { source: "../../initdb", target: "/docker-entrypoint-initdb.d", readOnly: true },
+      ]);
+      expect(manifest("web")).toMatchObject({
+        image: "docker.io/wger/server:latest",
+        dependsOn: ["db"],
+        container: { stopGracePeriod: "60s" },
+      });
+    },
+  );
+
+  it.runIf(hasDocker && process.env.FLISK_IMPORT_DOCKER !== "0")(
     "imports included and extended services with their own paths",
     (ctx) => {
       tree(files);
