@@ -10,7 +10,7 @@ flisk import . --yes         # write service.json files and project setup
 
 ## What to expect
 
-- **Reads one file:** the root `docker-compose.yml`, or `compose.yaml`, `compose.yml` or `docker-compose.yaml` when that is absent. Not override files, nested Compose files, Dockerfiles on their own, `package.json`, or Procfiles.
+- **Reads one project:** the root `docker-compose.yml`, or `compose.yaml`, `compose.yml` or `docker-compose.yaml` when that is absent, through `docker compose config --no-interpolate --no-env-resolution --no-path-resolution` when docker compose is installed, so `include:`, `extends` and anchors are resolved as `docker compose up` resolves them (wger keeps db, cache and powersync in `services/*.yaml`), `${VAR}` templates stay as written, and an included file's paths stay relative to its own folder. Without docker compose (or with `FLISK_IMPORT_DOCKER=0`) the file is read as YAML, and the plan says when that leaves `include` or `extends` unresolved. Not override files, Dockerfiles on their own, `package.json`, or Procfiles.
 - **Writes:** one bring-your-own `service.json` per Compose service, plus `.flisk/project.json` if the repo is not a Flisk project yet. It never edits the Compose file or overwrites a `service.json` without `--force`.
 - **Keeps the install's data:** each named volume gets `name`, the Docker volume `docker compose up` created (`<project>_<volume>`, its own `name:`, or an `external` volume), so `flisk up` mounts the same data with no copy (needs the Flisk release with flisk#2964).
 - **Keeps:** `profiles` (the service starts only with `flisk up --profile`), `env_file` as `envFile`, `tmpfs` and `deploy.resources.limits` (`container.tmpfs`, `cpus`, `memory`).
