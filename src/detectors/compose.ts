@@ -269,10 +269,17 @@ function hostSideOf(port: number, hostIp: string | undefined, hostPort: string |
     const publish = hostIp ? `${hostIp}:${hostPort}` : hostPort;
     return PUBLISH.test(publish) ? { publish } : undefined;
   }
-  if (hostIp === undefined || hostIp === "" || hostIp === "0.0.0.0") {
+  if (hostIp === undefined || hostIp === "") {
     // A bare container port ("3000") gets a random host port from Compose; Flisk keeps it on 127.0.0.1.
-    return hostPort === undefined ? {} : { ...keepHostPort, bind: "0.0.0.0" as const };
+    if (hostPort === undefined) return {};
+    // "3000:3000" names no host address: Compose listens on every interface, IPv6 too. `publish` writes the same bare mapping
+    // ("3000:3000/tcp"); `bind: "0.0.0.0"` would add the IPv4 address and drop IPv6 (flisk#2996).
+    return hostNumber !== undefined && hostNumber >= 1 && hostNumber <= 65535
+      ? { publish: String(hostNumber) }
+      : undefined;
   }
+  // The file names 0.0.0.0 on purpose, so that is what is kept.
+  if (hostIp === "0.0.0.0") return { ...keepHostPort, bind: "0.0.0.0" as const };
   if (hostIp === "127.0.0.1") return keepHostPort;
   const publish = `${hostIp}:${hostNumber ?? port}`;
   return /^\d{1,3}(\.\d{1,3}){3}:\d+$/.test(publish) ? { publish } : undefined;
@@ -846,21 +853,23 @@ function runtimeLimitsOf(raw: Obj): {
   return { ...out, dropped };
 }
 
+/** A port in a health URL: digits, or a shell/Compose variable such as `$${PORT:-3000}` that a shell healthcheck uses. */
+const URL_PORT = String.raw`(?:\d+|\$+\{[^}\s]*\}|\$+\w+)`;
+const HEALTH_URL = new RegExp(
+  String.raw`(?:https?:\/\/[^\s"'/]+|(?:^|(?<=[\s"']))(?:[a-z0-9.-]+:${URL_PORT}|(?:localhost|127\.0\.0\.1)(?::${URL_PORT})?))(\/[^\s"']*)`,
+  "i",
+);
+
+/** The HTTP path a Compose healthcheck command probes (`wget -qO- http://localhost:$${PORT:-3000}/api/health`), if it names one. */
 function healthPathOf(healthcheck: unknown): string | undefined {
   if (!isObj(healthcheck) || !Array.isArray(healthcheck.test)) return undefined;
   const test = healthcheck.test
     .filter((part): part is string => typeof part === "string")
     .join(" ");
-  const match = test.match(
-    /(?:https?:\/\/[^\s"'/]+|(?:^|(?<=[\s"']))(?:[a-z0-9.-]+:\d+|localhost|127\.0\.0\.1))(\/[^\s"']*)/i,
-  );
-  if (!match) return undefined;
-  try {
-    const raw = match[0];
-    return new URL(/^https?:\/\//i.test(raw) ? raw : `http://${raw}`).pathname || "/";
-  } catch {
-    return undefined;
-  }
+  const path = test.match(HEALTH_URL)?.[1];
+  if (path === undefined) return undefined;
+  // The query and fragment are not part of the route Traefik checks. The port may be a variable, so no URL parsing here.
+  return path.split(/[?#]/)[0] || "/";
 }
 
 registerDetector({

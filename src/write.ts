@@ -421,12 +421,18 @@ export function planWrites(plan: ImportPlan, force: boolean): WritePlan {
       `${p.publish ?? p.hostPort ?? p.port}->${p.port}/${p.protocol ?? "tcp"}`;
     const loopback = extraPorts.filter((p) => !p.bind && !p.publish);
     const everywhere = extraPorts.filter((p) => p.bind === "0.0.0.0");
-    const fromCompose = extraPorts.filter((p) => p.publish);
+    // A bare mapping ("3000:3000") names no host address: Compose listens on every interface, IPv4 and IPv6 (flisk#2996).
+    const bare = extraPorts.filter((p) => p.publish && /^\d+$/.test(p.publish));
+    const fromCompose = extraPorts.filter((p) => p.publish && !/^\d+$/.test(p.publish));
     if (loopback.length)
       notes.push(`published on 127.0.0.1 only: ${loopback.map(portText).join(", ")}`);
     if (everywhere.length)
       notes.push(
         `published on every interface, as in Compose: ${everywhere.map(portText).join(", ")} (flisk doctor lists these)`,
+      );
+    if (bare.length)
+      notes.push(
+        `published as Compose's bare mapping, on every interface (IPv4 and IPv6): ${bare.map(portText).join(", ")} (flisk doctor lists these)`,
       );
     if (fromCompose.length)
       notes.push(
