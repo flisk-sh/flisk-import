@@ -21,7 +21,7 @@ export interface ImportPlan {
 }
 
 const COMPOSE_FILE = "docker-compose.yml";
-/** Names `docker compose` also picks up, in its own order of preference; none of them is read. */
+/** Names `docker compose` also picks up, in its own order of preference. They are read only when docker-compose.yml is absent. */
 const OTHER_COMPOSE_FILES = ["compose.yaml", "compose.yml", "docker-compose.yaml"];
 /** Files `docker compose up` merges over the main file; none of them is applied. */
 const OVERRIDE_FILES = [
@@ -31,42 +31,38 @@ const OVERRIDE_FILES = [
   "docker-compose.override.yml",
 ];
 
-/** Read the one supported input, root docker-compose.yml. This function writes nothing. */
+/** Read the one supported input, the root Compose file. This function writes nothing. */
 export function buildPlan(dir: string): ImportPlan {
   const root = resolve(dir);
   if (!statSync(root, { throwIfNoEntry: false })?.isDirectory()) {
     throw new Error(`${dir} is not a directory`);
   }
-  const composePath = COMPOSE_FILE;
   const detectors = selectDetectors(["compose"]);
   const candidates: Candidate[] = [];
   const skips: Skip[] = [];
   const isFile = (name: string) =>
     statSync(resolve(root, name), { throwIfNoEntry: false })?.isFile() ?? false;
 
-  if (!isFile(composePath)) {
-    const others = OTHER_COMPOSE_FILES.filter(isFile);
+  const present = OTHER_COMPOSE_FILES.filter(isFile);
+  const composePath = isFile(COMPOSE_FILE) ? COMPOSE_FILE : present[0];
+  if (!composePath) {
     throw new ImportError(
-      `No root docker-compose.yml found in ${root}${others.length ? ` (found ${others.join(", ")})` : ""}; flisk import reads only that file`,
-      others.length
-        ? [
-            `Other Compose file names are not read yet. To import ${others[0]}, link it: ln -s ${others[0]} docker-compose.yml`,
-          ]
-        : ["Run flisk import in the directory that holds docker-compose.yml"],
+      `No root docker-compose.yml found in ${root} (nor compose.yaml); flisk import reads only the root Compose file`,
+      ["Run flisk import in the directory that holds docker-compose.yml (or compose.yaml)"],
     );
   }
-  for (const name of OTHER_COMPOSE_FILES.filter(isFile)) {
+  for (const name of present.filter((n) => n !== composePath)) {
     skips.push({
       file: name,
       detector: "compose",
-      reason: `not read; \`docker compose\` prefers it over ${COMPOSE_FILE}, so what it runs may differ from this plan`,
+      reason: `not read; \`docker compose\` prefers it over ${composePath}, so what it runs may differ from this plan`,
     });
   }
   for (const name of OVERRIDE_FILES.filter(isFile)) {
     skips.push({
       file: name,
       detector: "compose",
-      reason: `not applied; \`docker compose up\` merges it over ${COMPOSE_FILE}, flisk import does not`,
+      reason: `not applied; \`docker compose up\` merges it over ${composePath}, flisk import does not`,
     });
   }
   for (const detector of detectors) {

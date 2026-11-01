@@ -106,13 +106,12 @@ describe("flisk-import (built CLI)", () => {
     expect(existsSync(join(repo, "services"))).toBe(false);
   });
 
-  it("names compose.yaml when it is the only Compose file, and writes nothing", () => {
+  it("reads compose.yaml when it is the only Compose file", () => {
     rmSync(join(repo, "docker-compose.yml"));
     writeFileSync(join(repo, "compose.yaml"), "services:\n  web:\n    image: nginx\n");
-    const r = run(["shop", "--yes"]);
-    expect(r.code).toBe(1);
-    expect(r.err).toContain("(found compose.yaml); flisk import reads only that file");
-    expect(r.err).toContain("ln -s compose.yaml docker-compose.yml");
+    const r = run(["shop", "--dry-run"]);
+    expect(r.code).toBe(0);
+    expect(r.out).toContain("Read only: compose.yaml");
     expect(existsSync(join(repo, "services"))).toBe(false);
   });
 
