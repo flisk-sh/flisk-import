@@ -24,8 +24,6 @@ export interface WriteItem {
   service: MergedService;
   path: string;
   manifest: Record<string, unknown>;
-  /** Files written next to service.json, such as the Dockerfile that carries a Compose `command`. */
-  files: { path: string; content: string }[];
   status: WriteStatus;
   notes: string[];
 }
@@ -84,26 +82,6 @@ function looksSecret(value: string): boolean {
   } catch {
     return /:\/\/[^/\s]*@/.test(value);
   }
-}
-
-/**
- * `ARG` lines for the Compose variables in an image, so `FROM postgres:${POSTGRES_VERSION:-18}-alpine` can use them:
- * Docker substitutes only build arguments declared before FROM. The default is the expression's.
- */
-function imageArgExpressions(image: string): Record<string, string> {
-  const out: Record<string, string> = {};
-  for (const m of image.matchAll(/\$\{([A-Za-z_][A-Za-z0-9_]*)[^}]*\}/g))
-    out[m[1] as string] ??= m[0];
-  return out;
-}
-
-function buildArgLines(image: string): string {
-  const args = new Map<string, string | undefined>();
-  for (const m of image.matchAll(/\$\{([A-Za-z_][A-Za-z0-9_]*)(?::?-([^}]*)|:?\?[^}]*)?\}/g))
-    if (!args.has(m[1] as string)) args.set(m[1] as string, m[2]);
-  return [...args]
-    .map(([name, value]) => (value === undefined ? `ARG ${name}\n` : `ARG ${name}=${value}\n`))
-    .join("");
 }
 
 /** `POSTGRES_PASSWORD_FILE=/run/secrets/pg`: the path of a mounted secret file, which is not a secret itself. */
@@ -333,49 +311,21 @@ export function planWrites(plan: ImportPlan, force: boolean): WritePlan {
 
     // With both build and image, Compose builds the Dockerfile and tags the result as `image`.
     // Omit `image` from service.json so Flisk builds from the Dockerfile instead of pulling the tag.
-    // Flisk has no container `command`, so a Compose `command` on an image becomes the CMD of a one-line Dockerfile.
-    const files: WriteItem["files"] = [];
-    // Build arguments: Compose build.args for a Dockerfile build, and, for a generated Dockerfile on an image with
-    // variables, each variable with its own expression, so the project's .env reaches `ARG NAME` before FROM.
-    const imageArgs =
-      !service.dockerfile &&
-      service.image &&
-      (service.containerCommand || service.containerEntrypoint)
-        ? imageArgExpressions(service.image)
-        : {};
-    const buildArgsAll = {
-      ...(service.dockerfile ? (service.buildArgs ?? {}) : {}),
-      ...imageArgs,
-    };
-    const buildArgs = Object.keys(buildArgsAll).length ? buildArgsAll : undefined;
+    // A Compose `command` / `entrypoint` becomes container.command / container.entrypoint (Flisk 1.4.31), for an image and
+    // for a `build:` service alike; `$$` and `${VAR}` are written as Compose had them.
+    const buildArgs =
+      service.dockerfile && service.buildArgs && Object.keys(service.buildArgs).length
+        ? service.buildArgs
+        : undefined;
     if (service.buildArgs && !service.dockerfile)
       notes.push("build.args not written: the service has no build of its own");
-    const wrapWithCommand =
-      !service.dockerfile &&
-      service.image &&
-      (service.containerCommand || service.containerEntrypoint);
-    if (wrapWithCommand) {
-      files.push({
-        path: resolve(dirname(path), "Dockerfile"),
-        content: `# From the Compose \`command\` of this service (flisk import). Flisk sets no container command, so it lives here.\n${buildArgLines(service.image as string)}FROM ${service.image}\n${service.containerEntrypoint ? `ENTRYPOINT ${JSON.stringify(service.containerEntrypoint)}\n` : ""}${service.containerCommand ? `CMD ${JSON.stringify(service.containerCommand)}\n` : ""}`,
-      });
-      notes.push(
-        `${service.containerEntrypoint ? "entrypoint" : "command"} ${JSON.stringify(service.containerEntrypoint ?? service.containerCommand)} is written to a Dockerfile on ${service.image}`,
-      );
-    } else if (service.dockerfile && (service.containerCommand || service.containerEntrypoint)) {
-      notes.push(
-        `command/entrypoint not written: set it as CMD/ENTRYPOINT in ${service.dockerfile}`,
-      );
-    }
-    const source: Record<string, string> = wrapWithCommand
-      ? { buildContext: ".", dockerfile: "Dockerfile" }
-      : service.dockerfile
-        ? {
-            buildContext:
-              relative(dirname(path), resolve(plan.root, service.dir)).split("\\").join("/") || ".",
-            dockerfile: service.dockerfile,
-          }
-        : { image: service.image as string };
+    const source: Record<string, string> = service.dockerfile
+      ? {
+          buildContext:
+            relative(dirname(path), resolve(plan.root, service.dir)).split("\\").join("/") || ".",
+          dockerfile: service.dockerfile,
+        }
+      : { image: service.image as string };
     // A sidecar shares another written service's network; one whose host is not written stays a normal service.
     const sidecarOf =
       service.sidecarOf && service.sidecarOf !== service.name && names.has(service.sidecarOf)
@@ -395,7 +345,12 @@ export function planWrites(plan: ImportPlan, force: boolean): WritePlan {
     const aliases = [
       ...new Set([...(service.container?.networkAliases ?? []), ...(keepRenamed ? [renamed] : [])]),
     ].filter((alias) => alias !== service.name);
-    let container = service.container;
+    let container: typeof service.container = {
+      ...(service.containerEntrypoint ? { entrypoint: service.containerEntrypoint } : {}),
+      ...(service.containerCommand ? { command: service.containerCommand } : {}),
+      ...(service.container ?? {}),
+    };
+    if (!Object.keys(container).length) container = undefined;
     if (sidecarOf) {
       if (aliases.length)
         notes.push(
@@ -517,7 +472,7 @@ export function planWrites(plan: ImportPlan, force: boolean): WritePlan {
           }
         : {}),
     };
-    items.push({ service, path, manifest, files, status, notes });
+    items.push({ service, path, manifest, status, notes });
   }
   return {
     projectRoot,
@@ -543,7 +498,6 @@ export function applyWrites(writes: WritePlan): WriteItem[] {
     if (item.status === "exists") continue;
     mkdirSync(dirname(item.path), { recursive: true });
     writeFileSync(item.path, `${JSON.stringify(item.manifest, null, 2)}\n`);
-    for (const file of item.files) writeFileSync(file.path, file.content);
     written.push(item);
   }
   const keys = Object.keys(writes.env.add);

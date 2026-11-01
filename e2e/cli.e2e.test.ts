@@ -69,7 +69,7 @@ describe("flisk-import (built CLI)", () => {
       "DATABASE_URL=postgres://secret@db/app\n",
     );
     expect(readFileSync(join(repo, ".gitignore"), "utf8").split("\n")).toContain(".env");
-    expect(r.out).toContain("Run `flisk up` with Flisk core 1.4.28 or later");
+    expect(r.out).toContain("Run `flisk up` with Flisk core 1.4.31 or later");
     expect(JSON.stringify(manifest("api"))).not.toContain("postgres://");
     expect(existsSync(join(repo, ".flisk", "project.json"))).toBe(true);
   });

@@ -816,16 +816,34 @@ describe("Compose command, healthcheck, ports and restart", () => {
     expect(buildPlan((tree({ "docker-compose.yaml": compose }), root)).services).toHaveLength(3);
   });
 
-  it("wraps an image in a Dockerfile that carries the Compose command", () => {
+  it("writes the Compose command as container.command and keeps the image (no Dockerfile)", () => {
     const manifest = written();
-    expect(manifest("migrate")).toMatchObject({ buildContext: ".", dockerfile: "Dockerfile" });
-    expect(manifest("migrate")).not.toHaveProperty("image");
-    expect(readFileSync(join(dirname(serviceJson("migrate")), "Dockerfile"), "utf8")).toContain(
-      'FROM example/app:1\nCMD ["bundle","exec","rails","db:prepare"]\n',
-    );
-    expect(readFileSync(join(dirname(serviceJson("worker")), "Dockerfile"), "utf8")).toContain(
-      'CMD ["bundle","exec","sidekiq"]',
-    );
+    expect(manifest("migrate")).toMatchObject({
+      image: "example/app:1",
+      container: { command: ["bundle", "exec", "rails", "db:prepare"] },
+    });
+    expect(manifest("migrate")).not.toHaveProperty("dockerfile");
+    expect(manifest("migrate")).not.toHaveProperty("buildContext");
+    expect(manifest("worker").container.command).toEqual(["bundle", "exec", "sidekiq"]);
+    expect(existsSync(join(dirname(serviceJson("migrate")), "Dockerfile"))).toBe(false);
+  });
+
+  it("carries the command of a service that has build: too", () => {
+    tree({
+      "docker-compose.yml":
+        "services:\n  app:\n    build: ./app\n    command: node app.js --port 3000\n    entrypoint: ['/entry.sh']\n",
+      "app/Dockerfile": "FROM node:22\n",
+    });
+    const plan = buildPlan(root);
+    const writes = planWrites(plan, false);
+    applyWrites(writes);
+    const manifest = JSON.parse(readFileSync(serviceJson("app"), "utf8"));
+    expect(manifest.dockerfile).toBe("Dockerfile");
+    expect(manifest.container).toMatchObject({
+      entrypoint: ["/entry.sh"],
+      command: ["node", "app.js", "--port", "3000"],
+    });
+    expect(formatPlan(plan, writes)).not.toContain("command/entrypoint not written");
   });
 
   it("keeps on-failure with its retry limit", () => {
@@ -843,16 +861,17 @@ describe("Compose command, healthcheck, ports and restart", () => {
     });
   });
 
-  it("writes a Compose entrypoint as ENTRYPOINT and ignores networks and expose", () => {
+  it("writes a Compose entrypoint as container.entrypoint and ignores networks and expose", () => {
     tree({
       "docker-compose.yml":
         "services:\n  guard:\n    image: mongo:7\n    entrypoint: ['sh','-c','echo ok']\n    networks: [a]\n    expose: ['27017']\n",
     });
     const plan = buildPlan(root);
     applyWrites(planWrites(plan, false));
-    expect(readFileSync(join(dirname(serviceJson("guard")), "Dockerfile"), "utf8")).toContain(
-      'FROM mongo:7\nENTRYPOINT ["sh","-c","echo ok"]\n',
-    );
+    expect(JSON.parse(readFileSync(serviceJson("guard"), "utf8"))).toMatchObject({
+      image: "mongo:7",
+      container: { entrypoint: ["sh", "-c", "echo ok"] },
+    });
     expect(formatPlan(plan, planWrites(plan, true))).not.toContain("keys not translated");
   });
 
@@ -1116,52 +1135,73 @@ describe("Compose stop_grace_period, network aliases, extra_hosts, ulimits and c
 });
 
 describe("Compose command and entrypoint strings, split as Compose splits them", () => {
-  function dockerfile(compose: string) {
+  function container(compose: string) {
     tree({ "docker-compose.yml": compose });
     const plan = buildPlan(root);
     const writes = planWrites(plan, false);
     applyWrites(writes);
     return {
       text: formatPlan(plan, writes),
-      file: (name: string) => readFileSync(join(dirname(serviceJson(name)), "Dockerfile"), "utf8"),
+      of: (name: string) => JSON.parse(readFileSync(serviceJson(name), "utf8")).container,
     };
   }
 
-  it("writes codecov's minio `command: server /export` as exec-form arguments to the image ENTRYPOINT", () => {
-    const { file } = dockerfile(
+  it("writes codecov's minio `command: server /export` as exec-form arguments", () => {
+    const { of } = container(
       "services:\n  minio:\n    image: minio/minio:RELEASE.2020-04-15T00-39-01Z\n    command: server /export\n",
     );
-    expect(file("minio")).toContain('CMD ["server","/export"]\n');
-    expect(file("minio")).not.toContain("sh");
+    expect(of("minio")).toEqual({ command: ["server", "/export"] });
   });
 
   it("splits quotes and backslashes like a shell", () => {
-    const { file } = dockerfile(
+    const { of, text } = container(
       [
         "services:",
         "  api:",
         "    image: app:1",
         `    entrypoint: /bin/run --name "my app" 'a b' c\\ d`,
-        `    command: echo "say \\"hi\\"" ''`,
+        `    command: echo "say \\"hi\\""`,
       ].join("\n"),
     );
-    expect(file("api")).toContain('ENTRYPOINT ["/bin/run","--name","my app","a b","c d"]\n');
-    expect(file("api")).toContain('CMD ["echo","say \\"hi\\"",""]\n');
+    expect(of("api").entrypoint).toEqual(["/bin/run", "--name", "my app", "a b", "c d"]);
+    expect(of("api").command).toEqual(["echo", 'say "hi"']);
+    expect(text).not.toContain("refuse");
   });
 
   it("keeps a list form as it is", () => {
-    const { file } = dockerfile(
+    const { of } = container(
       "services:\n  worker:\n    image: app:1\n    command: ['sh', '-c', 'a && b']\n",
     );
-    expect(file("worker")).toContain('CMD ["sh","-c","a && b"]\n');
+    expect(of("worker").command).toEqual(["sh", "-c", "a && b"]);
   });
 
   it("falls back to sh -c for a string it cannot split, and says so", () => {
-    const { file, text } = dockerfile(
+    const { of, text } = container(
       `services:\n  bad:\n    image: app:1\n    command: echo "unbalanced\n`,
     );
-    expect(file("bad")).toContain('CMD ["sh","-c","echo \\"unbalanced"]\n');
+    expect(of("bad").command).toEqual(["sh", "-c", 'echo "unbalanced']);
     expect(text).toContain("has unbalanced quotes; it runs through sh -c");
+  });
+
+  it("keeps an empty entrypoint list, which drops the image's ENTRYPOINT", () => {
+    // `docker compose config --format json` prints an empty entrypoint as null, so this reads the file itself.
+    const before = process.env.FLISK_IMPORT_DOCKER;
+    process.env.FLISK_IMPORT_DOCKER = "0";
+    try {
+      const { of } = container(
+        "services:\n  app:\n    image: app:1\n    entrypoint: []\n    command: ['run']\n",
+      );
+      expect(of("app")).toEqual({ entrypoint: [], command: ["run"] });
+    } finally {
+      if (before === undefined) delete process.env.FLISK_IMPORT_DOCKER;
+      else process.env.FLISK_IMPORT_DOCKER = before;
+    }
+  });
+
+  it("does not write an empty argument, which Flisk refuses, and says so", () => {
+    const { text, of } = container(`services:\n  app:\n    image: app:1\n    command: echo ''\n`);
+    expect(of("app")).toBeUndefined();
+    expect(text).toContain("has an empty argument or a control character");
   });
 });
 
@@ -1389,14 +1429,16 @@ describe("pl_mail round trip: restart default, a turned-off healthcheck and imag
     expect(manifest("ntfy").extraPorts).toEqual([{ port: 80, publish: "${NTFY_PORT:-8090}" }]);
   });
 
-  it("declares the image's variables as ARG before FROM, with the expression's default", () => {
-    imported();
-    const dockerfile = (name: string) =>
-      readFileSync(join(dirname(serviceJson(name)), "Dockerfile"), "utf8");
-    expect(dockerfile("database")).toContain(
-      'ARG POSTGRES_VERSION=18\nFROM postgres:${POSTGRES_VERSION:-18}-alpine\nCMD ["postgres","-c","max_connections=200"]\n',
-    );
-    expect(dockerfile("worker")).toContain("ARG TAG\nFROM example/worker:${TAG}\n");
+  it("keeps the image's variables in `image` and the command in container.command (no Dockerfile)", () => {
+    const manifest = imported();
+    expect(manifest("database").image).toBe("postgres:${POSTGRES_VERSION:-18}-alpine");
+    expect(manifest("database").container.command).toEqual([
+      "postgres",
+      "-c",
+      "max_connections=200",
+    ]);
+    expect(manifest("worker").image).toBe("example/worker:${TAG}");
+    expect(existsSync(join(dirname(serviceJson("database")), "Dockerfile"))).toBe(false);
   });
 });
 
@@ -1454,20 +1496,20 @@ describe("the Compose project name, recorded for an export", () => {
   });
 });
 
-describe("$$ and Compose variables in a command moved into a Dockerfile (EDDI)", () => {
-  function dockerfile(compose: string) {
+describe("$$ and Compose variables in container.command (EDDI)", () => {
+  function container(compose: string) {
     tree({ "docker-compose.yml": compose });
     const plan = buildPlan(root);
     const writes = planWrites(plan, false);
     applyWrites(writes);
     return {
       text: formatPlan(plan, writes),
-      file: (name: string) => readFileSync(join(dirname(serviceJson(name)), "Dockerfile"), "utf8"),
+      of: (name: string) => JSON.parse(readFileSync(serviceJson(name), "utf8")).container,
     };
   }
 
-  it("turns $$ into $, so the container's shell reads the variable instead of its PID", () => {
-    const { file, text } = dockerfile(
+  it("keeps $$ as written: Flisk writes it into Compose, which turns it into $ for the container's shell", () => {
+    const { of, text } = container(
       [
         "services:",
         "  mongodb-app-user:",
@@ -1479,15 +1521,17 @@ describe("$$ and Compose variables in a command moved into a Dockerfile (EDDI)",
         "    command: sh -c 'echo $$HOME'",
       ].join("\n"),
     );
-    expect(file("mongodb-app-user")).toContain(
-      `ENTRYPOINT ["sh","-c","mongosh -u app -p \\"$MONGO_APP_PASSWORD\\" --eval 'db.x'"]`,
-    );
-    expect(file("echo-home")).toContain('CMD ["sh","-c","echo $HOME"]');
+    expect(of("mongodb-app-user").entrypoint).toEqual([
+      "sh",
+      "-c",
+      `mongosh -u app -p "$$MONGO_APP_PASSWORD" --eval 'db.x'`,
+    ]);
+    expect(of("echo-home").command).toEqual(["sh", "-c", "echo $$HOME"]);
     expect(text).not.toContain("uses Compose variables");
   });
 
-  it("names a command that uses Compose variables, which a Dockerfile cannot fill from .env", () => {
-    const { file, text } = dockerfile(
+  it("keeps ${VAR} as written: Compose fills it from .env, as it did in the original file", () => {
+    const { of, text } = container(
       [
         "services:",
         "  app:",
@@ -1498,14 +1542,9 @@ describe("$$ and Compose variables in a command moved into a Dockerfile (EDDI)",
         "    command: ['sh', '-c', 'echo ${NAME}']",
       ].join("\n"),
     );
-    expect(file("app")).toContain('CMD ["sh","-c","echo ${GREETING:-hi}"]');
-    expect(file("list")).toContain('CMD ["sh","-c","echo ${NAME}"]');
-    expect(text).toContain(
-      'service "app" command "echo ${GREETING:-hi}" uses Compose variables, which Compose filled from .env; in the generated Dockerfile it runs through sh -c',
-    );
-    expect(text).toContain(
-      'service "list" command ["sh","-c","echo ${NAME}"] uses Compose variables',
-    );
+    expect(of("app").command).toEqual(["echo", "${GREETING:-hi}"]);
+    expect(of("list").command).toEqual(["sh", "-c", "echo ${NAME}"]);
+    expect(text).not.toContain("uses Compose variables");
   });
 });
 
@@ -1646,9 +1685,10 @@ describe("include and extends, resolved through docker compose config (wger)", (
         { name: "db", condition: "service_healthy" },
       ]);
       // extends: the worker gets the cache image and its own command.
-      expect(readFileSync(join(dirname(serviceJson("worker")), "Dockerfile"), "utf8")).toContain(
-        'FROM docker.io/redis:7\nCMD ["redis-server","--port","6380"]\n',
-      );
+      expect(manifest("worker")).toMatchObject({
+        image: "docker.io/redis:7",
+        container: { command: ["redis-server", "--port", "6380"] },
+      });
       // Nothing config adds by default leaks into service.json.
       for (const name of ["db", "cache", "powersync", "nginx", "web"]) {
         const text = JSON.stringify(manifest(name));
@@ -1699,7 +1739,7 @@ describe("Flisk 1.4.28 fields: dependsOn conditions, buildArgs, logging, env bin
     expect(manifest("proxy").dependsOn).toEqual([{ name: "web", condition: "service_started" }]);
   });
 
-  it("keeps build.args, and passes an image variable to the generated Dockerfile's ARG (pl_mail database)", () => {
+  it("keeps build.args for a build, and writes none for an image (pl_mail database)", () => {
     const { manifest, text } = imported({
       "docker-compose.yml": [
         "services:",
@@ -1724,7 +1764,12 @@ describe("Flisk 1.4.28 fields: dependsOn conditions, buildArgs, logging, env bin
       MODE: "production",
     });
     expect(manifest("worker").buildArgs).toEqual({ NODE_VERSION: "20", EMPTY: "" });
-    expect(manifest("database").buildArgs).toEqual({ POSTGRES_VERSION: "${POSTGRES_VERSION:-18}" });
+    expect(manifest("database")).not.toHaveProperty("buildArgs");
+    expect(manifest("database").container.command).toEqual([
+      "postgres",
+      "-c",
+      "max_connections=200",
+    ]);
     expect(manifest("bad")).not.toHaveProperty("buildArgs");
     expect(text).toContain(
       'service "bad" build.args {"not ok":"x"} has names or values Flisk does not accept',
@@ -1783,7 +1828,7 @@ describe("Flisk 1.4.28 fields: dependsOn conditions, buildArgs, logging, env bin
     expect(text).toContain('volume "${OUTSIDE:-../../elsewhere}:/x" is not translated');
   });
 
-  it("writes any-sync's ${NAME:?message} image as it is, with a plain ARG in a generated Dockerfile", () => {
+  it("writes any-sync's ${NAME:?message} image as it is, with its command in container.command", () => {
     const { manifest, writes } = imported({
       "docker-compose.yml": [
         "services:",
@@ -1798,12 +1843,11 @@ describe("Flisk 1.4.28 fields: dependsOn conditions, buildArgs, logging, env bin
     expect(manifest("garage").image).toBe(
       "dxflrs/garage:${GARAGE_VERSION:?set GARAGE_VERSION in .env}",
     );
-    expect(readFileSync(join(dirname(serviceJson("wrapped")), "Dockerfile"), "utf8")).toContain(
-      "ARG GARAGE_VERSION\nFROM dxflrs/garage:${GARAGE_VERSION:?set GARAGE_VERSION in .env}\n",
+    expect(manifest("wrapped").image).toBe(
+      "dxflrs/garage:${GARAGE_VERSION:?set GARAGE_VERSION in .env}",
     );
-    expect(manifest("wrapped").buildArgs).toEqual({
-      GARAGE_VERSION: "${GARAGE_VERSION:?set GARAGE_VERSION in .env}",
-    });
+    expect(manifest("wrapped").container.command).toEqual(["server"]);
+    expect(manifest("wrapped")).not.toHaveProperty("buildArgs");
   });
 });
 
