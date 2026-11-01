@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -1206,6 +1207,7 @@ describe("Compose round trip: routed ports, healthchecks and env survive an expo
     expect(manifest("api").env).toEqual({
       APP_KEY: "${APP_KEY:-}",
       DB_PASSWORD: "${DB_PASSWORD:-password}",
+      MIXED: "x${A}",
       MODE: "worker",
       NESTED: "${A:-${B:-file}}",
       PMA_HOST: "lychee_db",
@@ -1216,8 +1218,159 @@ describe("Compose round trip: routed ports, healthchecks and env survive an expo
       "DB_PASS",
       "DSN",
       "HOOK",
-      "MIXED",
       "NOTE",
     ]);
+  });
+});
+
+describe("a project .env that git tracks (Symfony-style committed defaults)", () => {
+  const compose = [
+    "services:",
+    "  worker:",
+    "    image: postgres:${POSTGRES_VERSION:-18}-alpine",
+    "    environment:",
+    "      POSTGRES_PASSWORD_FILE: /run/plmail/postgres_password",
+    "      NTFY_LISTEN_HTTP: ':80'",
+    "      NTFY_VISITOR_REQUEST_LIMIT_REPLENISH: 5s",
+    "      NTFY_AUTH_FILE: /var/lib/ntfy/auth.db",
+    "      API_TOKEN: s3cr3t",
+  ].join("\n");
+  const tracked = "APP_ENV=dev\n";
+
+  function importTracked(gitignore: string) {
+    tree({ "docker-compose.yml": compose, ".env": tracked, ".gitignore": gitignore });
+    execFileSync("git", ["init", "-q"], { cwd: root });
+    execFileSync("git", ["add", ".env", ".gitignore"], { cwd: root });
+    const writes = planWrites(buildPlan(root), false);
+    applyWrites(writes);
+    return { writes, manifest: JSON.parse(readFileSync(serviceJson("worker"), "utf8")) };
+  }
+
+  it("leaves the tracked .env and .gitignore alone and writes secrets to the ignored .env.local", () => {
+    const { writes, manifest } = importTracked("/.env.local\n");
+    expect(readFileSync(join(root, ".env"), "utf8")).toBe(tracked);
+    expect(readFileSync(join(root, ".gitignore"), "utf8")).toBe("/.env.local\n");
+    expect(readFileSync(join(root, ".env.local"), "utf8")).toContain("API_TOKEN=s3cr3t\n");
+    expect(writes.env).toMatchObject({ tracked: ".env" });
+    expect(manifest.envFile).toEqual(["../../../.env.local"]);
+    expect(manifest.secrets).toEqual({ required: ["API_TOKEN"] });
+  });
+
+  it("uses .flisk/.env.import, gitignored, when .env.local is not ignored", () => {
+    const { manifest } = importTracked("vendor/\n");
+    expect(readFileSync(join(root, ".env"), "utf8")).toBe(tracked);
+    expect(readFileSync(join(root, ".flisk", ".env.import"), "utf8")).toContain(
+      "API_TOKEN=s3cr3t\n",
+    );
+    expect(readFileSync(join(root, ".gitignore"), "utf8")).toBe("vendor/\n.flisk/.env.import\n");
+    expect(manifest.envFile).toEqual(["../../../.flisk/.env.import"]);
+  });
+
+  it("commits pl_mail's secret-file paths and plain settings in env", () => {
+    const { manifest } = importTracked("/.env.local\n");
+    expect(manifest.env).toEqual({
+      NTFY_AUTH_FILE: "/var/lib/ntfy/auth.db",
+      NTFY_LISTEN_HTTP: ":80",
+      NTFY_VISITOR_REQUEST_LIMIT_REPLENISH: "5s",
+      POSTGRES_PASSWORD_FILE: "/run/plmail/postgres_password",
+    });
+  });
+});
+
+describe("pl_mail round trip: restart default, a turned-off healthcheck and image variables in a generated Dockerfile", () => {
+  const compose = [
+    "services:",
+    "  database:",
+    "    image: postgres:${POSTGRES_VERSION:-18}-alpine",
+    "    command: postgres -c max_connections=200",
+    "  worker:",
+    "    image: example/worker:${TAG}",
+    "    command: ['php', 'bin/console', 'messenger:consume']",
+    "    restart: unless-stopped",
+    "    healthcheck:",
+    "      disable: true",
+    "  ntfy:",
+    "    image: binwiederhier/ntfy:v2",
+    "    ports: ['${NTFY_PORT:-8090}:80']",
+    "    healthcheck:",
+    "      test: ['NONE']",
+  ].join("\n");
+
+  function imported() {
+    tree({ "docker-compose.yml": compose });
+    const plan = buildPlan(root);
+    applyWrites(planWrites(plan, false));
+    return (name: string) => JSON.parse(readFileSync(serviceJson(name), "utf8"));
+  }
+
+  it('writes restart "no" for a service Compose does not restart, since Flisk defaults to unless-stopped', () => {
+    const manifest = imported();
+    expect(manifest("database").restart).toBe("no");
+    expect(manifest("worker").restart).toBe("unless-stopped");
+  });
+
+  it("keeps disable: true and test: [NONE] as healthCheck: false, with no health path", () => {
+    const manifest = imported();
+    expect(manifest("worker").healthCheck).toBe(false);
+    expect(manifest("ntfy").healthCheck).toBe(false);
+    expect(manifest("ntfy")).not.toHaveProperty("healthCheckPath");
+    expect(manifest("ntfy").extraPorts).toEqual([{ port: 80, publish: "${NTFY_PORT:-8090}" }]);
+  });
+
+  it("declares the image's variables as ARG before FROM, with the expression's default", () => {
+    imported();
+    const dockerfile = (name: string) =>
+      readFileSync(join(dirname(serviceJson(name)), "Dockerfile"), "utf8");
+    expect(dockerfile("database")).toContain(
+      'ARG POSTGRES_VERSION=18\nFROM postgres:${POSTGRES_VERSION:-18}-alpine\nCMD ["postgres","-c","max_connections=200"]\n',
+    );
+    expect(dockerfile("worker")).toContain("ARG TAG\nFROM example/worker:${TAG}\n");
+  });
+});
+
+describe("env values that mix Compose expressions with literal text", () => {
+  it("commits them unless the name or the text could be a credential", () => {
+    tree({
+      "docker-compose.yml": [
+        "services:",
+        "  php:",
+        "    image: app:1",
+        "    environment:",
+        '      SERVER_NAME: "${SERVER_NAME:-localhost, :443}, php:80"',
+        '      DATABASE_URL: "postgres://app:${DB_PASSWORD}@database:5432/app"',
+        '      API_TOKEN: "tok-${SUFFIX}"',
+        '      BAD: "x$Y${Z}"',
+      ].join("\n"),
+    });
+    applyWrites(planWrites(buildPlan(root), false));
+    const php = JSON.parse(readFileSync(serviceJson("php"), "utf8"));
+    expect(php.env).toEqual({ SERVER_NAME: "${SERVER_NAME:-localhost, :443}, php:80" });
+    expect(php.secrets.required.sort()).toEqual(["API_TOKEN", "BAD", "DATABASE_URL"]);
+  });
+});
+
+describe("the Compose project name, recorded for an export", () => {
+  it("records the folder name as Compose computes it in a new project.json", () => {
+    tree({ "docker-compose.yml": "services:\n  web:\n    image: nginx:1\n" });
+    applyWrites(planWrites(buildPlan(root), false));
+    const config = JSON.parse(readFileSync(join(root, ".flisk", "project.json"), "utf8"));
+    expect(config.composeProjectNames).toEqual({ shop: "shop" });
+  });
+
+  it("records a top-level name in an existing project.json and keeps the rest", () => {
+    tree({
+      "docker-compose.yml": "name: Pl_Mail\nservices:\n  web:\n    image: nginx:1\n",
+      ".flisk/project.json": '{"version":"1.0","custom":{"a":1}}\n',
+    });
+    const plan = buildPlan(root);
+    const writes = planWrites(plan, false);
+    expect(formatPlan(plan, writes)).toContain('[add composeProjectNames.shop: "pl_mail"');
+    applyWrites(writes);
+    expect(JSON.parse(readFileSync(join(root, ".flisk", "project.json"), "utf8"))).toEqual({
+      version: "1.0",
+      custom: { a: 1 },
+      composeProjectNames: { shop: "pl_mail" },
+    });
+    expect(planWrites(buildPlan(root), false).projectConfigUpdate).toBeUndefined();
   });
 });

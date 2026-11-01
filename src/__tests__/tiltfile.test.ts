@@ -76,7 +76,11 @@ describe("planTiltfileImport", () => {
     const compose = planWrites(buildPlan(root), false).projectConfig;
     const composeConfig = JSON.parse(compose?.content ?? "{}");
     // Same template, without an imported Compose stack, plus the orchestration source.
-    expect(Object.keys(created)).toEqual([...Object.keys(composeConfig), "orchestration"]);
+    // composeProjectNames is the Compose import's own record of the Compose project name.
+    expect(Object.keys(created)).toEqual([
+      ...Object.keys(composeConfig).filter((key) => key !== "composeProjectNames"),
+      "orchestration",
+    ]);
     expect(created.project).toEqual({ name: "shop", version: "1.0.0" });
     expect(created.phases.pre_alpha.enabledStacks).toEqual(["proxy"]);
     expect(created.discovery).toEqual(composeConfig.discovery);

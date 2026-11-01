@@ -31,7 +31,8 @@ export interface MergedService {
   models?: ModelRef[];
   profiles?: string[];
   envFile?: string[];
-  healthCheck?: HealthCheckProbe;
+  /** `false` when Compose turns the healthcheck off (`disable: true` or `test: ["NONE"]`). */
+  healthCheck?: HealthCheckProbe | false;
   /** Procfile commands retained for the importer's buildability check. */
   procfileCommands: string[];
   port?: number;

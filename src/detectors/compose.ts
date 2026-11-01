@@ -349,7 +349,7 @@ function volumeOf(entry: unknown, composeDir: string): VolumeMount | undefined {
 }
 
 /** Compose's project name: top-level `name`, else the directory name, lowercased with other characters dropped. */
-function projectNameOf(root: unknown, absPath: string): string | undefined {
+export function projectNameOf(root: unknown, absPath: string): string | undefined {
   const raw =
     isObj(root) && typeof root.name === "string" && !root.name.includes("$")
       ? root.name
@@ -438,7 +438,29 @@ export function isComposeExpression(value: string): boolean {
   return value.length > 0;
 }
 
-/** Values that are only `${VAR}` references, which service.json `env` can keep as they are (Flisk 1.4.24). */
+/**
+ * A value that mixes Compose expressions with literal text (`${SERVER_NAME:-localhost, :443}, php:80`), every `${`
+ * starting a valid expression. Undefined when it is not one; else the literal text with the expressions taken out.
+ */
+export function composeTemplateText(value: string): string | undefined {
+  if (!value.includes("${") || value.includes("\n")) return undefined;
+  let literal = "";
+  let i = 0;
+  while (i < value.length) {
+    if (value.startsWith("${", i)) {
+      const end = expressionEnd(value, i);
+      if (end === undefined) return undefined;
+      i = end;
+    } else {
+      if (value[i] === "$" && value[i + 1] !== "$") return undefined;
+      literal += value[i];
+      i++;
+    }
+  }
+  return literal;
+}
+
+/** Values with `${VAR}` references (alone or in literal text), which service.json `env` can keep as they are (Flisk 1.4.24). */
 function envReferences(environment: unknown): Record<string, string> {
   const pairs: [string, unknown][] = Array.isArray(environment)
     ? environment
@@ -449,7 +471,7 @@ function envReferences(environment: unknown): Record<string, string> {
       : [];
   const out: Record<string, string> = {};
   for (const [key, raw] of pairs) {
-    if (typeof raw === "string" && isComposeExpression(raw)) out[key] = raw;
+    if (typeof raw === "string" && composeTemplateText(raw) !== undefined) out[key] = raw;
   }
   return out;
 }
@@ -810,7 +832,12 @@ registerDetector({
             reason: `service "${name}" ${key} ${JSON.stringify(raw[key])} ${args.shell}; it runs through sh -c, which Compose would not do`,
           });
       }
-      const healthProbe = healthProbeOf(raw.healthcheck);
+      // `disable: true` or `test: ["NONE"]` turns off the image's own HEALTHCHECK too, so it is kept as healthCheck: false.
+      const healthOff =
+        isObj(raw.healthcheck) &&
+        (raw.healthcheck.disable === true ||
+          (Array.isArray(raw.healthcheck.test) && raw.healthcheck.test[0] === "NONE"));
+      const healthProbe = healthOff ? false : healthProbeOf(raw.healthcheck);
       const envKeys = envNames(raw.environment);
       const env = envValues(raw.environment);
       const envRefs = envReferences(raw.environment);
@@ -926,7 +953,7 @@ registerDetector({
         ...(models ? { models } : {}),
         ...(profiles ? { profiles } : {}),
         ...(envFile ? { envFile } : {}),
-        ...(healthProbe ? { healthCheck: healthProbe } : {}),
+        ...(healthProbe !== undefined ? { healthCheck: healthProbe } : {}),
         ...(selectedPort !== undefined ? { port: selectedPort } : {}),
         ...(healthCheckPath ? { healthCheckPath } : {}),
         exposeViaProxy,
@@ -938,7 +965,8 @@ registerDetector({
         ...(extraPorts.length ? { extraPorts } : {}),
         ...(sidecarOf ? { sidecarOf } : {}),
         ...(volumes.length ? { volumes } : {}),
-        ...(restart ? { restart } : {}),
+        // Compose restarts nothing unless asked; Flisk defaults to unless-stopped, so "no" is written.
+        ...(restart ? { restart } : raw.restart === undefined ? { restart: "no" as const } : {}),
         confidence: "high",
         sources: [base],
       });
