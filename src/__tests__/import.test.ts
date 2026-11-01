@@ -1340,12 +1340,19 @@ describe("env values that mix Compose expressions with literal text", () => {
         '      DATABASE_URL: "postgres://app:${DB_PASSWORD}@database:5432/app"',
         '      API_TOKEN: "tok-${SUFFIX}"',
         '      BAD: "x$Y${Z}"',
+        '      MONGODB_CONNECTIONSTRING: "mongodb://${U:-app}:${P:-${ROOT:-changeme}}@mongodb:27017/eddi?authSource=eddi"',
+        '      HOOK_URL: "https://x.example.com/${PATH_PART}?token=abc"',
       ].join("\n"),
     });
     applyWrites(planWrites(buildPlan(root), false));
     const php = JSON.parse(readFileSync(serviceJson("php"), "utf8"));
-    expect(php.env).toEqual({ SERVER_NAME: "${SERVER_NAME:-localhost, :443}, php:80" });
-    expect(php.secrets.required.sort()).toEqual(["API_TOKEN", "BAD", "DATABASE_URL"]);
+    expect(php.env).toEqual({
+      MONGODB_CONNECTIONSTRING:
+        "mongodb://${U:-app}:${P:-${ROOT:-changeme}}@mongodb:27017/eddi?authSource=eddi",
+      SERVER_NAME: "${SERVER_NAME:-localhost, :443}, php:80",
+    });
+    // A literal user (app:) or token query parameter stays secret.
+    expect(php.secrets.required.sort()).toEqual(["API_TOKEN", "BAD", "DATABASE_URL", "HOOK_URL"]);
   });
 });
 
@@ -1372,5 +1379,60 @@ describe("the Compose project name, recorded for an export", () => {
       composeProjectNames: { shop: "pl_mail" },
     });
     expect(planWrites(buildPlan(root), false).projectConfigUpdate).toBeUndefined();
+  });
+});
+
+describe("$$ and Compose variables in a command moved into a Dockerfile (EDDI)", () => {
+  function dockerfile(compose: string) {
+    tree({ "docker-compose.yml": compose });
+    const plan = buildPlan(root);
+    const writes = planWrites(plan, false);
+    applyWrites(writes);
+    return {
+      text: formatPlan(plan, writes),
+      file: (name: string) => readFileSync(join(dirname(serviceJson(name)), "Dockerfile"), "utf8"),
+    };
+  }
+
+  it("turns $$ into $, so the container's shell reads the variable instead of its PID", () => {
+    const { file, text } = dockerfile(
+      [
+        "services:",
+        "  mongodb-app-user:",
+        "    image: mongo:7",
+        `    entrypoint: ["sh", "-c", "mongosh -u app -p \\"$$MONGO_APP_PASSWORD\\" --eval 'db.x'"]`,
+        "    restart: 'no'",
+        "  echo-home:",
+        "    image: alpine:3",
+        "    command: sh -c 'echo $$HOME'",
+      ].join("\n"),
+    );
+    expect(file("mongodb-app-user")).toContain(
+      `ENTRYPOINT ["sh","-c","mongosh -u app -p \\"$MONGO_APP_PASSWORD\\" --eval 'db.x'"]`,
+    );
+    expect(file("echo-home")).toContain('CMD ["sh","-c","echo $HOME"]');
+    expect(text).not.toContain("uses Compose variables");
+  });
+
+  it("names a command that uses Compose variables, which a Dockerfile cannot fill from .env", () => {
+    const { file, text } = dockerfile(
+      [
+        "services:",
+        "  app:",
+        "    image: alpine:3",
+        "    command: echo ${GREETING:-hi}",
+        "  list:",
+        "    image: alpine:3",
+        "    command: ['sh', '-c', 'echo ${NAME}']",
+      ].join("\n"),
+    );
+    expect(file("app")).toContain('CMD ["sh","-c","echo ${GREETING:-hi}"]');
+    expect(file("list")).toContain('CMD ["sh","-c","echo ${NAME}"]');
+    expect(text).toContain(
+      'service "app" command "echo ${GREETING:-hi}" uses Compose variables, which Compose filled from .env; in the generated Dockerfile it runs through sh -c',
+    );
+    expect(text).toContain(
+      'service "list" command ["sh","-c","echo ${NAME}"] uses Compose variables',
+    );
   });
 });

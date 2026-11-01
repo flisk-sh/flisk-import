@@ -538,17 +538,54 @@ export function shellWords(text: string): string[] | undefined {
  * into words as Compose splits it, with no shell, so an image ENTRYPOINT (minio) gets `server /export` as its arguments.
  * Only a string that cannot be split, or that reads `$VAR` at run time, runs through `sh -c`; `shell` says why.
  */
-function containerCommandOf(command: unknown): { argv: string[]; shell?: string } | undefined {
+function containerCommandOf(command: unknown): { argv: string[]; note?: string } | undefined {
   if (typeof command === "string" && command.trim()) {
-    if (command.includes("$")) return { argv: ["sh", "-c", command], shell: "uses $ variables" };
-    const words = shellWords(command);
+    const { text, interpolates } = unescapeDollars(command);
+    if (interpolates)
+      return {
+        argv: ["sh", "-c", text],
+        note: "uses Compose variables, which Compose filled from .env; in the generated Dockerfile it runs through sh -c, so the container's shell fills them from its own environment",
+      };
+    const words = shellWords(text);
     return words?.length
       ? { argv: words }
-      : { argv: ["sh", "-c", command], shell: "has unbalanced quotes" };
+      : {
+          argv: ["sh", "-c", text],
+          note: "has unbalanced quotes; it runs through sh -c, which Compose would not do",
+        };
   }
-  if (Array.isArray(command) && command.length > 0 && command.every((c) => typeof c === "string"))
-    return { argv: command as string[] };
+  if (Array.isArray(command) && command.length > 0 && command.every((c) => typeof c === "string")) {
+    const parts = (command as string[]).map(unescapeDollars);
+    return {
+      argv: parts.map((p) => p.text),
+      ...(parts.some((p) => p.interpolates)
+        ? {
+            note: "uses Compose variables, which Compose filled from .env; the generated Dockerfile passes them as written (a sh -c argument fills them from the container's environment)",
+          }
+        : {}),
+    };
+  }
   return undefined;
+}
+
+/**
+ * A Compose command as the container sees it: `$$` is Compose's escape for a literal `$` (so `$$PASSWORD` reaches the
+ * container's shell as `$PASSWORD`). `interpolates` says whether a single `$` (`${VAR}`, `$VAR`) asks Compose to fill
+ * a value from .env, which a Dockerfile cannot do.
+ */
+function unescapeDollars(value: string): { text: string; interpolates: boolean } {
+  let text = "";
+  let interpolates = false;
+  for (let i = 0; i < value.length; i++) {
+    if (value[i] === "$" && value[i + 1] === "$") {
+      text += "$";
+      i++;
+      continue;
+    }
+    if (value[i] === "$" && /[{A-Za-z_]/.test(value[i + 1] ?? "")) interpolates = true;
+    text += value[i];
+  }
+  return { text, interpolates };
 }
 
 const DURATION_UNIT: Record<string, number> = { h: 3600, m: 60, s: 1, ms: 0.001, us: 0.000001 };
@@ -826,10 +863,10 @@ registerDetector({
         ["command", commandArgs],
         ["entrypoint", entrypointArgs],
       ] as const) {
-        if (args?.shell)
+        if (args?.note)
           skips.push({
             ...base,
-            reason: `service "${name}" ${key} ${JSON.stringify(raw[key])} ${args.shell}; it runs through sh -c, which Compose would not do`,
+            reason: `service "${name}" ${key} ${JSON.stringify(raw[key])} ${args.note}`,
           });
       }
       // `disable: true` or `test: ["NONE"]` turns off the image's own HEALTHCHECK too, so it is kept as healthCheck: false.

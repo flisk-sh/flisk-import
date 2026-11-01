@@ -65,6 +65,10 @@ const CREDENTIAL_NAME =
  * user or password, a query parameter named like a credential, a PEM block, a long random-looking token, or a value
  * that says it is one (SECRET, TOKEN, PASSWORD).
  */
+/** Query parameters that carry a credential (`?token=`, `?api_key=`, `&sig=`); `authSource` and the like do not. */
+const CREDENTIAL_QUERY =
+  /token|secret|pass(word|wd)?$|api[_-]?key|^key$|^sig(nature)?$|access[_-]?key/i;
+
 function looksSecret(value: string): boolean {
   if (/^[^\s:@/]+:[^\s@/]+@/.test(value) || value.includes("-----BEGIN")) return true;
   if (/SECRET|TOKEN|PASSWORD|PASSWD/i.test(value)) return true;
@@ -75,7 +79,7 @@ function looksSecret(value: string): boolean {
     const url = new URL(value);
     return (
       Boolean(url.username || url.password) ||
-      [...url.searchParams.keys()].some((key) => CREDENTIAL_NAME.test(key))
+      [...url.searchParams.keys()].some((key) => CREDENTIAL_QUERY.test(key))
     );
   } catch {
     return /:\/\/[^/\s]*@/.test(value);
@@ -272,13 +276,10 @@ export function planWrites(plan: ImportPlan, force: boolean): WritePlan {
       const literal = service.env[key];
       const reference = service.envRefs[key];
       if (literal === undefined && reference !== undefined) {
-        // A pure expression is committed whatever its name; one mixed with literal text only when that text could
-        // not be a credential.
+        // A pure expression is committed whatever its name; one mixed with literal text only when that text, with
+        // the expressions taken out, could not be a credential (`mongodb://${USER}:${PASSWORD:-x}@db/app` can).
         const text = composeTemplateText(reference) ?? "";
-        if (
-          isComposeExpression(reference) ||
-          (!CREDENTIAL_NAME.test(key) && !looksSecret(text) && !looksSecret(reference))
-        )
+        if (isComposeExpression(reference) || (!CREDENTIAL_NAME.test(key) && !looksSecret(text)))
           env[key] = reference;
       } else if (literal !== undefined && isSecretFilePath(key, literal)) env[key] = literal;
       else if (literal !== undefined && !CREDENTIAL_NAME.test(key) && !looksSecret(literal))
