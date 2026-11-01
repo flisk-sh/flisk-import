@@ -309,6 +309,43 @@ describe("Compose values Flisk cannot take as they are", () => {
     expect(text).not.toContain("Compose has no HTTP healthcheck URL");
   });
 
+  // liketrek/TREK (flisk#2996): a bare `3000:3000` and a shell healthcheck whose URL port is a variable.
+  it("keeps a bare port bare and reads the health path from a shell healthcheck with a variable port", () => {
+    const { manifest, text } = plan(
+      [
+        "services:",
+        "  app:",
+        "    image: mauriceboe/trek:latest",
+        "    ports:",
+        '      - "3000:3000"',
+        "    healthcheck:",
+        '      test: ["CMD-SHELL", "wget -qO- http://localhost:$${PORT:-3000}/api/health || exit 1"]',
+        "      interval: 30s",
+      ].join("\n"),
+    );
+    expect(manifest("app").extraPorts).toEqual([{ port: 3000, publish: "3000" }]);
+    expect(manifest("app").healthCheckPath).toBe("/api/health");
+    expect(manifest("app").healthCheck).toMatchObject({ command: expect.any(Array) });
+    expect(text).toContain("    health:    /api/health\n");
+    expect(text).not.toContain("(assumed)");
+    expect(text).not.toContain("health path / is assumed");
+    expect(text).toContain("bare mapping, on every interface (IPv4 and IPv6): 3000->3000/tcp");
+  });
+
+  it("reads a health path with a query and a $VAR port", () => {
+    const { manifest } = plan(
+      [
+        "services:",
+        "  app:",
+        "    image: example/app:1",
+        "    ports: ['3000:3000']",
+        "    healthcheck:",
+        '      test: ["CMD-SHELL", "curl -f http://127.0.0.1:$PORT/healthz?full=1 || exit 1"]',
+      ].join("\n"),
+    );
+    expect(manifest("app").healthCheckPath).toBe("/healthz");
+  });
+
   it("names every Compose key that is not translated", () => {
     const { text } = plan(
       [
@@ -557,26 +594,31 @@ describe("Compose runtime keys (capabilities, ports, network_mode, volumes, rest
       restart: "unless-stopped",
       exposeViaProxy: false,
       extraPorts: [
-        { port: 80, bind: "0.0.0.0" },
-        { port: 443, bind: "0.0.0.0" },
-        { port: 443, bind: "0.0.0.0", protocol: "udp" },
+        { port: 80, publish: "80" },
+        { port: 443, publish: "443" },
+        { port: 443, publish: "443", protocol: "udp" },
       ],
     });
     expect(text).toContain(
-      "published on every interface, as in Compose: 80->80/tcp, 443->443/tcp, 443->443/udp",
+      "bare mapping, on every interface (IPv4 and IPv6): 80->80/tcp, 443->443/tcp, 443->443/udp",
     );
   });
 
   // Compose publishes on every interface unless the mapping names an address; a migration must not change who can connect.
   it.each([
-    ["'8080:7000'", { port: 7000, hostPort: 8080, bind: "0.0.0.0" }],
+    ["'8080:7000'", { port: 7000, publish: "8080" }],
+    ["'7000:7000'", { port: 7000, publish: "7000" }],
     ["'0.0.0.0:80:7000'", { port: 7000, hostPort: 80, bind: "0.0.0.0" }],
     ["'127.0.0.1:8080:7000'", { port: 7000, hostPort: 8080 }],
     ["'7000'", { port: 7000 }],
     ["'192.168.1.10:8080:7000'", { port: 7000, publish: "192.168.1.10:8080" }],
     ['"${APP_HTTP_BIND:-80}:7000"', { port: 7000, publish: "${APP_HTTP_BIND:-80}" }],
     ['"127.0.0.1:${APP_PORT:-8080}:7000"', { port: 7000, publish: "127.0.0.1:${APP_PORT:-8080}" }],
-    ["{ target: 7000, published: 8080 }", { port: 7000, hostPort: 8080, bind: "0.0.0.0" }],
+    ["{ target: 7000, published: 8080 }", { port: 7000, publish: "8080" }],
+    [
+      "{ target: 7000, published: 8080, host_ip: 0.0.0.0 }",
+      { port: 7000, hostPort: 8080, bind: "0.0.0.0" },
+    ],
     ["{ target: 7000, published: '8080', host_ip: 127.0.0.1 }", { port: 7000, hostPort: 8080 }],
   ])("keeps the host address of %s", (spec, expected) => {
     tree({
@@ -621,7 +663,7 @@ describe("Compose runtime keys (capabilities, ports, network_mode, volumes, rest
       port: 3010,
       container: { capAdd: ["NET_ADMIN"], init: true },
       // The routed 3010 stays published as in Compose, so plain `docker compose` (and the export) still reach it.
-      extraPorts: [{ port: 3010, bind: "0.0.0.0" }, { port: 9100 }],
+      extraPorts: [{ port: 3010, publish: "3010" }, { port: 9100 }],
       volumes: [{ source: "app-data", target: "/data" }],
     });
   });
@@ -1598,7 +1640,7 @@ describe("include and extends, resolved through docker compose config (wger)", (
       expect(manifest("nginx").volumes).toEqual([
         { source: "../../../config/nginx.conf", target: "/etc/nginx/conf.d/default.conf" },
       ]);
-      expect(manifest("nginx").extraPorts).toEqual([{ port: 80, bind: "0.0.0.0" }]);
+      expect(manifest("nginx").extraPorts).toEqual([{ port: 80, publish: "80" }]);
       expect(manifest("web").dependsOn).toEqual([
         { name: "cache", condition: "service_healthy" },
         { name: "db", condition: "service_healthy" },

@@ -120,9 +120,9 @@ export interface ExtraPort {
   port: number;
   hostPort?: number;
   protocol?: "tcp" | "udp";
-  /** "0.0.0.0" when Compose published the port on every interface (no host address); loopback is the default. */
+  /** "0.0.0.0" when the Compose file names that address on purpose; loopback is the default. A bare mapping uses `publish`. */
   bind?: "0.0.0.0";
-  /** The host side as Compose wrote it, when it names another address or a `${VAR:-default}` (flisk#2947). */
+  /** The host side as Compose wrote it: a bare host port ("3000", every interface incl. IPv6), another address, or a `${VAR:-default}` (flisk#2947, flisk#2996). */
   publish?: string;
 }
 
