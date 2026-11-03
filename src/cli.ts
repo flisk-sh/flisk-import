@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { readFileSync } from "node:fs";
-import { join, relative } from "node:path";
+import { relative } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { Command } from "commander";
 import "./detectors/index.js";
