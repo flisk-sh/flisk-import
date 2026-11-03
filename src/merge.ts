@@ -53,6 +53,8 @@ export interface MergedService {
   /** Resource name of the service whose network this one shares. */
   sidecarOf?: string;
   volumes?: VolumeMount[];
+  secretFiles?: Candidate["secretFiles"];
+  configs?: Candidate["configs"];
   restart?: Candidate["restart"];
   conflicts: Conflict[];
   sources: Source[];
@@ -120,6 +122,8 @@ function firstOf<
     | "container"
     | "extraPorts"
     | "volumes"
+    | "secretFiles"
+    | "configs"
     | "restart"
     | "containerCommand"
     | "containerEntrypoint"
@@ -156,6 +160,8 @@ function mergeGroup(
     ...firstOf(ordered, "container"),
     ...firstOf(ordered, "extraPorts"),
     ...firstOf(ordered, "volumes"),
+    ...firstOf(ordered, "secretFiles"),
+    ...firstOf(ordered, "configs"),
     ...firstOf(ordered, "restart"),
     ...firstOf(ordered, "containerCommand"),
     ...firstOf(ordered, "containerEntrypoint"),
