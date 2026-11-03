@@ -1,14 +1,26 @@
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
+import { relative, resolve as resolvePath } from "node:path";
 import { basename, dirname, isAbsolute, join, normalize } from "node:path/posix";
 import { isAlias, isMap, type Node, parseDocument, visit } from "yaml";
-import { HEALTH_CHECK_PATH_PATTERN, NETWORK_ALIAS } from "../flisk.js";
+import {
+  findProjectBoundary,
+  findProjectRoot,
+  HEALTH_CHECK_PATH_PATTERN,
+  isAnyAbsolute,
+  isPathWithin,
+  NETWORK_ALIAS,
+  parseComposeMode,
+  safeCanonicalPath,
+} from "../flisk.js";
 import { registerDetector } from "../registry.js";
 import type {
   Candidate,
+  ConfigFile,
   ContainerOptions,
   DependsOnCondition,
   ExtraPort,
+  FileSecret,
   HealthCheckProbe,
   ModelRef,
   Skip,
@@ -68,6 +80,8 @@ const TRANSLATED_KEYS = new Set([
   "stop_grace_period",
   "extra_hosts",
   "ulimits",
+  "secrets",
+  "configs",
   // Only `aliases` is read from networks: Flisk gives every service its own stack network.
   "networks",
   "expose",
@@ -902,6 +916,122 @@ registerDetector({
     }
 
     const project = projectNameOf(root, absPath);
+    const absComposeDir = dirname(absPath);
+    const planRoot = resolvePath(
+      absComposeDir,
+      ...(composeDir ? composeDir.split("/").map(() => "..") : []),
+    );
+    const projectRoot = findProjectBoundary(absComposeDir);
+
+    interface TopLevelDef {
+      name: string;
+      file?: string;
+      unsupportedReason?: string;
+    }
+
+    const validateResourcePath = (
+      resName: string,
+      kind: "secret" | "config",
+      filePath: string,
+    ): { file?: string; error?: string } => {
+      if (isAnyAbsolute(filePath)) {
+        return {
+          error: `${kind} "${resName}" file ${JSON.stringify(filePath)} is outside the project root`,
+        };
+      }
+      const absFile = resolvePath(absComposeDir, filePath);
+      const safe = safeCanonicalPath(absFile, projectRoot);
+      if (safe.error || !safe.canonical) {
+        return {
+          error: `${kind} "${resName}" file ${JSON.stringify(filePath)} cannot be resolved: ${safe.error}`,
+        };
+      }
+      const canonicalTarget = safe.canonical;
+      if (!isPathWithin(projectRoot, canonicalTarget)) {
+        return {
+          error: `${kind} "${resName}" file ${JSON.stringify(filePath)} is outside the project root`,
+        };
+      }
+      const relToPlan = relative(planRoot, absFile).split("\\").join("/");
+      return { file: relToPlan };
+    };
+
+    const topSecrets = new Map<string, TopLevelDef>();
+    if (isObj(root) && isObj(root.secrets)) {
+      for (const [secName, def] of Object.entries(root.secrets)) {
+        if (!isObj(def)) {
+          topSecrets.set(secName, {
+            name: secName,
+            unsupportedReason: `secret "${secName}" is not file-backed; not translated`,
+          });
+        } else if (def.external === true) {
+          topSecrets.set(secName, {
+            name: secName,
+            unsupportedReason: `secret "${secName}" is external; not translated`,
+          });
+        } else if (typeof def.environment === "string") {
+          topSecrets.set(secName, {
+            name: secName,
+            unsupportedReason: `secret "${secName}" uses environment; not translated`,
+          });
+        } else if (typeof def.file === "string") {
+          const res = validateResourcePath(secName, "secret", def.file);
+          if (res.error) {
+            topSecrets.set(secName, { name: secName, unsupportedReason: res.error });
+          } else {
+            topSecrets.set(secName, { name: secName, file: res.file });
+          }
+        } else {
+          topSecrets.set(secName, {
+            name: secName,
+            unsupportedReason: `secret "${secName}" has no file: path; not translated`,
+          });
+        }
+      }
+    }
+
+    const topConfigs = new Map<string, TopLevelDef>();
+    if (isObj(root) && isObj(root.configs)) {
+      for (const [cfgName, def] of Object.entries(root.configs)) {
+        if (!isObj(def)) {
+          topConfigs.set(cfgName, {
+            name: cfgName,
+            unsupportedReason: `config "${cfgName}" is not file-backed; not translated`,
+          });
+        } else if (def.external === true) {
+          topConfigs.set(cfgName, {
+            name: cfgName,
+            unsupportedReason: `config "${cfgName}" is external; not translated`,
+          });
+        } else if (typeof def.environment === "string") {
+          topConfigs.set(cfgName, {
+            name: cfgName,
+            unsupportedReason: `config "${cfgName}" uses environment; not translated`,
+          });
+        } else if (typeof def.file === "string") {
+          const res = validateResourcePath(cfgName, "config", def.file);
+          if (res.error) {
+            topConfigs.set(cfgName, { name: cfgName, unsupportedReason: res.error });
+          } else {
+            topConfigs.set(cfgName, { name: cfgName, file: res.file });
+          }
+        } else {
+          topConfigs.set(cfgName, {
+            name: cfgName,
+            unsupportedReason: `config "${cfgName}" has no file: path; not translated`,
+          });
+        }
+      }
+    }
+
+    // Top-level unsupported secrets and configs diagnostic
+    for (const [, s] of topSecrets) {
+      if (s.unsupportedReason) skips.push({ ...base, reason: s.unsupportedReason });
+    }
+    for (const [, c] of topConfigs) {
+      if (c.unsupportedReason) skips.push({ ...base, reason: c.unsupportedReason });
+    }
+
     // Services another one waits for with `condition: service_completed_successfully`: one-shot jobs.
     const awaitedJobs = new Set(
       Object.values(services).flatMap((svc) =>
@@ -1144,6 +1274,123 @@ registerDetector({
           reason: `service "${name}" keys not translated: ${untranslated.join(", ")}`,
         });
       }
+      const secretFiles: FileSecret[] = [];
+      if (raw.secrets !== undefined) {
+        const entries = Array.isArray(raw.secrets) ? raw.secrets : [];
+        for (let entryIdx = 0; entryIdx < entries.length; entryIdx++) {
+          const entry = entries[entryIdx];
+          let sourceName: string | undefined;
+          let targetPath: string | undefined;
+          let uid: string | undefined;
+          let gid: string | undefined;
+          let mode: number | string | undefined;
+          if (typeof entry === "string") {
+            sourceName = entry;
+            targetPath = `/run/secrets/${entry}`;
+          } else if (isObj(entry) && typeof entry.source === "string") {
+            sourceName = entry.source;
+            targetPath =
+              typeof entry.target === "string" ? entry.target : `/run/secrets/${sourceName}`;
+            if (typeof entry.uid === "string" || typeof entry.uid === "number")
+              uid = String(entry.uid);
+            if (typeof entry.gid === "string" || typeof entry.gid === "number")
+              gid = String(entry.gid);
+            const astNode = doc.getIn(["services", name, "secrets", entryIdx, "mode"], true);
+            mode = parseComposeMode(entry.mode, astNode);
+          }
+          if (!sourceName) {
+            skips.push({
+              ...base,
+              reason: `service "${name}" secret entry is not valid; not mounted`,
+            });
+            continue;
+          }
+          const topSec = topSecrets.get(sourceName);
+          if (!topSec) {
+            skips.push({
+              ...base,
+              reason: `service "${name}" secret "${sourceName}" is not declared in top-level secrets; not mounted`,
+            });
+            continue;
+          }
+          if (topSec.unsupportedReason) {
+            skips.push({
+              ...base,
+              reason: `service "${name}" secret "${sourceName}" is not translated: ${topSec.unsupportedReason}`,
+            });
+            continue;
+          }
+          if (topSec.file) {
+            secretFiles.push({
+              name: sourceName,
+              source: topSec.file,
+              target: targetPath!,
+              ...(uid !== undefined ? { uid } : {}),
+              ...(gid !== undefined ? { gid } : {}),
+              ...(mode !== undefined ? { mode } : {}),
+            });
+          }
+        }
+      }
+
+      const configs: ConfigFile[] = [];
+      if (raw.configs !== undefined) {
+        const entries = Array.isArray(raw.configs) ? raw.configs : [];
+        for (let entryIdx = 0; entryIdx < entries.length; entryIdx++) {
+          const entry = entries[entryIdx];
+          let sourceName: string | undefined;
+          let targetPath: string | undefined;
+          let uid: string | undefined;
+          let gid: string | undefined;
+          let mode: number | string | undefined;
+          if (typeof entry === "string") {
+            sourceName = entry;
+            targetPath = `/${entry}`;
+          } else if (isObj(entry) && typeof entry.source === "string") {
+            sourceName = entry.source;
+            targetPath = typeof entry.target === "string" ? entry.target : `/${sourceName}`;
+            if (typeof entry.uid === "string" || typeof entry.uid === "number")
+              uid = String(entry.uid);
+            if (typeof entry.gid === "string" || typeof entry.gid === "number")
+              gid = String(entry.gid);
+            const astNode = doc.getIn(["services", name, "configs", entryIdx, "mode"], true);
+            mode = parseComposeMode(entry.mode, astNode);
+          }
+          if (!sourceName) {
+            skips.push({
+              ...base,
+              reason: `service "${name}" config entry is not valid; not mounted`,
+            });
+            continue;
+          }
+          const topCfg = topConfigs.get(sourceName);
+          if (!topCfg) {
+            skips.push({
+              ...base,
+              reason: `service "${name}" config "${sourceName}" is not declared in top-level configs; not mounted`,
+            });
+            continue;
+          }
+          if (topCfg.unsupportedReason) {
+            skips.push({
+              ...base,
+              reason: `service "${name}" config "${sourceName}" is not translated: ${topCfg.unsupportedReason}`,
+            });
+            continue;
+          }
+          if (topCfg.file) {
+            configs.push({
+              name: sourceName,
+              source: topCfg.file,
+              target: targetPath!,
+              ...(uid !== undefined ? { uid } : {}),
+              ...(gid !== undefined ? { gid } : {}),
+              ...(mode !== undefined ? { mode } : {}),
+            });
+          }
+        }
+      }
+
       // Any single published port that is not a known database/broker port is treated as HTTP,
       // including 8000 and 8080; a service with no published port stays private, as in Compose.
       const exposeViaProxy = selectedPort !== undefined && !NON_HTTP_PORTS.has(selectedPort);
@@ -1176,6 +1423,8 @@ registerDetector({
         ...(extraPorts.length ? { extraPorts } : {}),
         ...(sidecarOf ? { sidecarOf } : {}),
         ...(volumes.length ? { volumes } : {}),
+        ...(secretFiles.length ? { secretFiles } : {}),
+        ...(configs.length ? { configs } : {}),
         // Flisk runs a bring-your-own service with restart "no" as a one-shot job and waits for it to exit, so "no" is
         // written only when Compose says so or another service waits for this one to complete. Otherwise restart is
         // left out (Flisk's unless-stopped).

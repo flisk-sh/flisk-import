@@ -1,5 +1,12 @@
-import { existsSync } from "node:fs";
-import { basename, dirname, join, resolve } from "node:path";
+import { existsSync, lstatSync, readlinkSync, realpathSync } from "node:fs";
+import {
+  basename,
+  dirname,
+  isAbsolute as isNativeAbsolute,
+  join,
+  relative,
+  resolve,
+} from "node:path";
 
 /** Manifest constants of the Flisk service.json this tool writes. */
 export const SERVICE_MANIFEST_SCHEMA_VERSION = 1;
@@ -58,6 +65,141 @@ export function findProjectRoot(start: string): string | null {
     if (parent === dir) return null;
     dir = parent;
   }
+}
+
+/** Nearest directory at or above `start` holding a `.git` repository directory or file (worktree). */
+export function findGitRoot(start: string): string | null {
+  let dir = resolve(start);
+  while (true) {
+    if (existsSync(join(dir, ".git"))) return dir;
+    const parent = dirname(dir);
+    if (parent === dir) return null;
+    dir = parent;
+  }
+}
+
+/** The project root: first .flisk, then .git, falling back to start. */
+export function findProjectBoundary(start: string): string {
+  return findProjectRoot(start) ?? findGitRoot(start) ?? resolve(start);
+}
+
+/** Check if a path is absolute on either POSIX or Windows. */
+export function isAnyAbsolute(p: string): boolean {
+  if (p.startsWith("/") || p.startsWith("\\")) return true;
+  if (/^[a-zA-Z]:[\\/]/.test(p) || /^[a-zA-Z]:$/.test(p)) return true;
+  return isNativeAbsolute(p);
+}
+
+/** Check if targetPath is strictly contained within projectRoot without escaping. */
+export function isPathWithin(projectRoot: string, targetPath: string): boolean {
+  const normProject = (
+    safeCanonicalPath(projectRoot, projectRoot).canonical ?? resolve(projectRoot)
+  ).replace(/\\/g, "/");
+  const normTarget = (
+    safeCanonicalPath(targetPath, normProject).canonical ?? resolve(targetPath)
+  ).replace(/\\/g, "/");
+
+  // Cross-drive check on Windows
+  const rootDrive = normProject.match(/^([a-zA-Z]:)/)?.[1]?.toLowerCase();
+  const targetDrive = normTarget.match(/^([a-zA-Z]:)/)?.[1]?.toLowerCase();
+  if (rootDrive && targetDrive && rootDrive !== targetDrive) {
+    return false;
+  }
+
+  const rel = relative(normProject, normTarget).split("\\").join("/");
+  if (rel === ".." || rel.startsWith("../") || isAnyAbsolute(rel) || /^[a-zA-Z]:/.test(rel)) {
+    return false;
+  }
+  return true;
+}
+
+/**
+ * Safely resolve symlinks for an existing or not-yet-existing target path within projectRoot.
+ * Traverses ancestors to ensure dangling symlinks pointing outside the project are caught.
+ */
+export function safeCanonicalPath(
+  targetPath: string,
+  projectRoot: string,
+): { canonical?: string; error?: string } {
+  try {
+    const real = realpathSync(targetPath);
+    return { canonical: real.replace(/\\/g, "/") };
+  } catch (err: unknown) {
+    const code = (err as { code?: string })?.code;
+    if (code !== "ENOENT") {
+      return { error: `cannot resolve path: ${String(err)}` };
+    }
+  }
+
+  let current = resolve(targetPath);
+  const trailingParts: string[] = [];
+
+  while (current !== dirname(current)) {
+    try {
+      const st = lstatSync(current);
+      if (st.isSymbolicLink()) {
+        const linkTarget = readlinkSync(current);
+        const resolvedTarget = isAnyAbsolute(linkTarget)
+          ? linkTarget
+          : resolve(dirname(current), linkTarget);
+        // Follow symlink recursively
+        const targetResult = safeCanonicalPath(resolvedTarget, projectRoot);
+        if (targetResult.error || !targetResult.canonical) return targetResult;
+        const reassembled = resolve(targetResult.canonical, ...trailingParts);
+        return safeCanonicalPath(reassembled, projectRoot);
+      }
+      const real = realpathSync(current);
+      const fullPath = resolve(real, ...trailingParts);
+      return { canonical: fullPath.replace(/\\/g, "/") };
+    } catch (e: unknown) {
+      const code = (e as { code?: string })?.code;
+      if (code === "ENOENT") {
+        trailingParts.unshift(basename(current));
+        current = dirname(current);
+      } else {
+        return { error: `cannot resolve path: ${String(e)}` };
+      }
+    }
+  }
+
+  return { canonical: targetPath.replace(/\\/g, "/") };
+}
+
+/**
+ * Normalize Compose file permission mode (which may be given as octal string or number in YAML).
+ * In YAML 1.2, unquoted `0440` is parsed as decimal 440; if an AST scalar node is available,
+ * we inspect its source token to recover the intended octal representation.
+ */
+export function parseComposeMode(raw: unknown, astNode?: unknown): number | string | undefined {
+  if (raw === undefined || raw === null) return undefined;
+  if (
+    astNode &&
+    typeof astNode === "object" &&
+    "source" in astNode &&
+    typeof (astNode as { source?: unknown }).source === "string"
+  ) {
+    const src = ((astNode as { source: string }).source ?? "").trim();
+    if (/^0[0-7]+$/.test(src)) {
+      return parseInt(src, 8);
+    }
+    if (/^0o[0-7]+$/i.test(src)) {
+      return parseInt(src.slice(2), 8);
+    }
+  }
+  if (typeof raw === "string") {
+    const trimmed = raw.trim();
+    if (/^0o[0-7]+$/i.test(trimmed)) {
+      return parseInt(trimmed.slice(2), 8);
+    }
+    if (/^0[0-7]+$/.test(trimmed)) {
+      return parseInt(trimmed, 8);
+    }
+    return raw;
+  }
+  if (typeof raw === "number") {
+    return raw;
+  }
+  return undefined;
 }
 
 /**

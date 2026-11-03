@@ -1,5 +1,13 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -1866,5 +1874,346 @@ describe("an uppercase project folder (Lychee)", () => {
     // Compose lowercases the folder and drops the spaces, so this is the name containers had.
     expect(config.composeProjectNames).toEqual({ "my-lychee-app": "mylychee_app" });
     expect(existsSync(join(upper, "services", "my-lychee-app", "web", "service.json"))).toBe(true);
+  });
+});
+
+describe("Compose file-backed secrets: and configs: (flisk#3059)", () => {
+  it("imports file-backed secrets and configs in short and long syntax with targets and permissions", () => {
+    tree({
+      "docker-compose.yml": `
+services:
+  web:
+    image: catchpoint/webpagetest:latest
+    secrets:
+      - source: wpt_settings_ini
+        target: /var/www/webpagetest/settings/settings.ini
+        uid: "1000"
+        gid: "1000"
+        mode: 0440
+      - wpt_keys_ini
+    configs:
+      - source: gitlab_cfg
+        target: /etc/gitlab/config.json
+        mode: 0644
+  worker:
+    image: redis:7
+    secrets:
+      - wpt_keys_ini
+
+secrets:
+  wpt_settings_ini:
+    file: ./docker/local/wptconfig/settings.ini
+  wpt_keys_ini:
+    file: ./docker/local/wptconfig/keys.ini
+
+configs:
+  gitlab_cfg:
+    file: ./configs/gitlab.json
+`,
+      "docker/local/wptconfig/settings.ini": "SECRET_MARKER_CONTENT_DO_NOT_SERIALIZE",
+      "docker/local/wptconfig/keys.ini": "ANOTHER_SECRET_CONTENT",
+      "configs/gitlab.json": '{"mode": "production"}',
+    });
+
+    const plan = buildPlan(root);
+    const writes = planWrites(plan, false);
+    applyWrites(writes);
+
+    const web = JSON.parse(readFileSync(serviceJson("web"), "utf8"));
+    const worker = JSON.parse(readFileSync(serviceJson("worker"), "utf8"));
+
+    // Verify web service.json secrets.files
+    expect(web.secrets).toBeDefined();
+    expect(web.secrets.files).toEqual([
+      {
+        name: "wpt_settings_ini",
+        source: "../../../docker/local/wptconfig/settings.ini",
+        target: "/var/www/webpagetest/settings/settings.ini",
+        uid: "1000",
+        gid: "1000",
+        mode: 288, // 0440 in octal
+      },
+      {
+        name: "wpt_keys_ini",
+        source: "../../../docker/local/wptconfig/keys.ini",
+        target: "/run/secrets/wpt_keys_ini",
+      },
+    ]);
+
+    // Verify web service.json configs
+    expect(web.configs).toEqual([
+      {
+        name: "gitlab_cfg",
+        source: "../../../configs/gitlab.json",
+        target: "/etc/gitlab/config.json",
+        mode: 420, // 0644 in octal
+      },
+    ]);
+
+    // Verify shared secret across multiple services
+    expect(worker.secrets.files).toEqual([
+      {
+        name: "wpt_keys_ini",
+        source: "../../../docker/local/wptconfig/keys.ini",
+        target: "/run/secrets/wpt_keys_ini",
+      },
+    ]);
+
+    // Zero secret contents leaked in manifests or plan
+    const webRaw = readFileSync(serviceJson("web"), "utf8");
+    expect(webRaw).not.toContain("SECRET_MARKER_CONTENT_DO_NOT_SERIALIZE");
+    expect(webRaw).not.toContain("ANOTHER_SECRET_CONTENT");
+  });
+
+  it("preserves environment variable secrets in secrets.required alongside secrets.files", () => {
+    tree({
+      "docker-compose.yml": `
+services:
+  app:
+    image: node:20
+    environment:
+      - DB_PASSWORD
+      - API_TOKEN
+    secrets:
+      - app_cert
+
+secrets:
+  app_cert:
+    file: ./certs/app.pem
+`,
+      "certs/app.pem": "CERT_DATA",
+    });
+
+    const plan = buildPlan(root);
+    const writes = planWrites(plan, false);
+    applyWrites(writes);
+
+    const app = JSON.parse(readFileSync(serviceJson("app"), "utf8"));
+    expect(app.secrets).toBeDefined();
+    expect(app.secrets.required).toEqual(["API_TOKEN", "DB_PASSWORD"]);
+    expect(app.secrets.files).toEqual([
+      {
+        name: "app_cert",
+        source: "../../../certs/app.pem",
+        target: "/run/secrets/app_cert",
+      },
+    ]);
+  });
+
+  it("reports understandable diagnostic skips for unsupported external and environment secrets without failing import", () => {
+    tree({
+      "docker-compose.yml": `
+services:
+  web:
+    image: nginx:alpine
+    secrets:
+      - valid_sec
+      - external_sec
+      - env_sec
+
+secrets:
+  valid_sec:
+    file: ./secret.txt
+  external_sec:
+    external: true
+  env_sec:
+    environment: ENV_SECRET_VAR
+`,
+      "secret.txt": "valid",
+    });
+
+    const plan = buildPlan(root);
+    expect(
+      plan.skips.some((s) =>
+        s.reason.includes('secret "external_sec" is external; not translated'),
+      ),
+    ).toBe(true);
+    expect(
+      plan.skips.some((s) =>
+        s.reason.includes('secret "env_sec" uses environment; not translated'),
+      ),
+    ).toBe(true);
+
+    const writes = planWrites(plan, false);
+    applyWrites(writes);
+
+    const web = JSON.parse(readFileSync(serviceJson("web"), "utf8"));
+    // Only the valid file-backed secret is mounted
+    expect(web.secrets.files).toHaveLength(1);
+    expect(web.secrets.files[0].name).toBe("valid_sec");
+  });
+
+  it("refuses path traversal outside project root with a diagnostic skip", () => {
+    tree({
+      "docker-compose.yml": `
+services:
+  web:
+    image: nginx:alpine
+    secrets:
+      - evil_sec
+
+secrets:
+  evil_sec:
+    file: ../../../../etc/passwd
+`,
+    });
+
+    const plan = buildPlan(root);
+    expect(
+      plan.skips.some((s) =>
+        s.reason.includes(
+          'secret "evil_sec" file "../../../../etc/passwd" is outside the project root',
+        ),
+      ),
+    ).toBe(true);
+    const writes = planWrites(plan, false);
+    applyWrites(writes);
+    const web = JSON.parse(readFileSync(serviceJson("web"), "utf8"));
+    expect(web.secrets).toBeUndefined();
+  });
+
+  it("imports nested compose file with project-local secrets and configs relative to project root", () => {
+    // Project root has .git, Compose sits in deploy/compose/, secret and config live in project root
+    tree({
+      ".git/config": "[core]\n",
+      "secrets/app.key": "SECRET_KEY_DATA",
+      "configs/app.conf": "server { listen 80; }",
+      "deploy/compose/docker-compose.yml": `
+services:
+  api:
+    image: node:20-alpine
+    secrets:
+      - app_secret
+    configs:
+      - app_config
+
+secrets:
+  app_secret:
+    file: ../../secrets/app.key
+
+configs:
+  app_config:
+    file: ../../configs/app.conf
+`,
+    });
+
+    const composeDir = join(root, "deploy", "compose");
+    const plan = buildPlan(composeDir);
+    expect(plan.skips.some((s) => s.reason.includes("is outside the project root"))).toBe(false);
+    const writes = planWrites(plan, false);
+    applyWrites(writes);
+
+    const apiItem = writes.items.find((i) => i.service.name === "api");
+    expect(apiItem).toBeDefined();
+    const api = JSON.parse(readFileSync(apiItem?.path ?? "", "utf8"));
+    expect(api.secrets?.files).toHaveLength(1);
+    expect(api.secrets.files[0].name).toBe("app_secret");
+    expect(api.secrets.files[0].source).toBe("../../../secrets/app.key");
+    expect(api.configs).toHaveLength(1);
+    expect(api.configs[0].name).toBe("app_config");
+    expect(api.configs[0].source).toBe("../../../configs/app.conf");
+  });
+
+  it("rejects Windows drive-qualified file paths", () => {
+    tree({
+      "docker-compose.yml": `
+services:
+  web:
+    image: nginx:alpine
+    secrets:
+      - win_secret
+
+secrets:
+  win_secret:
+    file: "D:\\\\secrets\\\\secret.txt"
+`,
+    });
+
+    const plan = buildPlan(root);
+    expect(
+      plan.skips.some((s) =>
+        s.reason.includes(
+          'secret "win_secret" file "D:\\\\secrets\\\\secret.txt" is outside the project root',
+        ),
+      ),
+    ).toBe(true);
+  });
+
+  it("correctly parses octal mode permissions in YAML fallback", () => {
+    tree({
+      "docker-compose.yml": `
+services:
+  web:
+    image: nginx:alpine
+    secrets:
+      - source: octal_sec
+        mode: 0440
+      - source: string_octal_sec
+        mode: "0440"
+      - source: explicit_octal_sec
+        mode: 0o440
+    configs:
+      - source: octal_cfg
+        mode: 0644
+
+secrets:
+  octal_sec:
+    file: ./secrets/sec.txt
+  string_octal_sec:
+    file: ./secrets/sec.txt
+  explicit_octal_sec:
+    file: ./secrets/sec.txt
+
+configs:
+  octal_cfg:
+    file: ./configs/cfg.txt
+`,
+      "secrets/sec.txt": "SECRET",
+      "configs/cfg.txt": "CONFIG",
+    });
+
+    const plan = buildPlan(root);
+    const writes = planWrites(plan, false);
+    applyWrites(writes);
+
+    const web = JSON.parse(readFileSync(serviceJson("web"), "utf8"));
+    expect(web.secrets?.files).toBeDefined();
+    expect(web.secrets.files[0].mode).toBe(288); // 0440 octal -> 288
+    expect(web.secrets.files[1].mode).toBe(288);
+    expect(web.secrets.files[2].mode).toBe(288);
+    expect(web.configs[0].mode).toBe(420); // 0644 octal -> 420
+  });
+
+  it("rejects dangling symlink pointing outside project root", () => {
+    tree({
+      "secrets/dummy.txt": "dummy",
+    });
+    // Create dangling symlink pointing outside
+    try {
+      symlinkSync("../../../../../nonexistent-secret", join(root, "secrets", "dangling-link"));
+    } catch {}
+
+    tree({
+      "docker-compose.yml": `
+services:
+  web:
+    image: nginx:alpine
+    secrets:
+      - dangling_sec
+
+secrets:
+  dangling_sec:
+    file: ./secrets/dangling-link
+`,
+    });
+
+    const plan = buildPlan(root);
+    expect(
+      plan.skips.some((s) =>
+        s.reason.includes(
+          'secret "dangling_sec" file "./secrets/dangling-link" is outside the project root',
+        ),
+      ),
+    ).toBe(true);
   });
 });

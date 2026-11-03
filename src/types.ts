@@ -67,10 +67,32 @@ export interface Candidate {
   sidecarOf?: string;
   /** Named volumes and bind mounts, as service.json `volumes` (flisk#1748). Bind sources are relative to the import root. */
   volumes?: VolumeMount[];
+  /** File-backed secrets from top-level `secrets:`, as service.json `secrets.files` (flisk#3059). */
+  secretFiles?: FileSecret[];
+  /** File-backed configs from top-level `configs:`, as service.json `configs` (flisk#3059). */
+  configs?: ConfigFile[];
   /** A Compose restart policy; `on-failure:N` keeps its retry limit (N from 1 to 100). */
   restart?: "no" | "on-failure" | "unless-stopped" | "always" | `on-failure:${number}`;
   confidence: Confidence;
   sources: Source[];
+}
+
+export interface FileSecret {
+  name: string;
+  source: string;
+  target: string;
+  uid?: string;
+  gid?: string;
+  mode?: number | string;
+}
+
+export interface ConfigFile {
+  name: string;
+  source: string;
+  target: string;
+  uid?: string;
+  gid?: string;
+  mode?: number | string;
 }
 
 export type DependsOnCondition =

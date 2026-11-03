@@ -7,8 +7,9 @@ import { ImportError } from "./errors.js";
 import {
   BYO_PORT_RANGE,
   defaultProjectConfig,
-  findProjectRoot,
+  findProjectBoundary,
   IMAGE_PATTERN,
+  isPathWithin,
   NETWORK_ALIAS,
   SERVICE_MANIFEST_SCHEMA_URL,
   SERVICE_MANIFEST_SCHEMA_VERSION,
@@ -124,7 +125,7 @@ const NON_HTTP_IMAGE =
   /(^|\/)(postgres|mysql|mariadb|mongo|mongodb|redis|valkey|memcached|minio|mailpit|mailhog|rabbitmq|kafka|zookeeper|elasticsearch|opensearch|openssh-server)(:|@|$)/i;
 
 export function planWrites(plan: ImportPlan, force: boolean): WritePlan {
-  const projectRoot = findProjectRoot(plan.root) ?? plan.root;
+  const projectRoot = findProjectBoundary(plan.root);
   const stack = toResourceName(basename(plan.root));
   const stackCheck = validateName("Stack name", stack);
   if (!stackCheck.valid) {
@@ -432,6 +433,51 @@ export function planWrites(plan: ImportPlan, force: boolean): WritePlan {
       }
       return [relative(serviceDir, absolute).split("\\").join("/")];
     });
+    // File-backed secrets (secrets.files) and configs (flisk#3059)
+    const secretFiles = (service.secretFiles ?? []).flatMap((f) => {
+      const absolute = resolve(plan.root, f.source);
+      if (!isPathWithin(projectRoot, absolute)) {
+        notes.push(`secret ${f.name} (${f.source}) not written: it is outside the project`);
+        return [];
+      }
+      const rel = relative(serviceDir, absolute).split("\\").join("/") || ".";
+      const source = rel.startsWith(".") ? rel : `./${rel}`;
+      return [
+        {
+          name: f.name,
+          source,
+          target: f.target,
+          ...(f.uid !== undefined ? { uid: f.uid } : {}),
+          ...(f.gid !== undefined ? { gid: f.gid } : {}),
+          ...(f.mode !== undefined ? { mode: f.mode } : {}),
+        },
+      ];
+    });
+
+    const configs = (service.configs ?? []).flatMap((c) => {
+      const absolute = resolve(plan.root, c.source);
+      if (!isPathWithin(projectRoot, absolute)) {
+        notes.push(`config ${c.name} (${c.source}) not written: it is outside the project`);
+        return [];
+      }
+      const rel = relative(serviceDir, absolute).split("\\").join("/") || ".";
+      const source = rel.startsWith(".") ? rel : `./${rel}`;
+      return [
+        {
+          name: c.name,
+          source,
+          target: c.target,
+          ...(c.uid !== undefined ? { uid: c.uid } : {}),
+          ...(c.gid !== undefined ? { gid: c.gid } : {}),
+          ...(c.mode !== undefined ? { mode: c.mode } : {}),
+        },
+      ];
+    });
+
+    const secrets: Record<string, unknown> = {};
+    if (secretNames.length) secrets.required = secretNames;
+    if (secretFiles.length) secrets.files = secretFiles;
+
     const manifest: Record<string, unknown> = {
       $schema: SERVICE_MANIFEST_SCHEMA_URL,
       schemaVersion: SERVICE_MANIFEST_SCHEMA_VERSION,
@@ -449,7 +495,8 @@ export function planWrites(plan: ImportPlan, force: boolean): WritePlan {
       ...(Object.keys(env).length
         ? { env: Object.fromEntries(Object.entries(env).sort(([a], [b]) => a.localeCompare(b))) }
         : {}),
-      ...(secretNames.length ? { secrets: { required: secretNames } } : {}),
+      ...(Object.keys(secrets).length ? { secrets } : {}),
+      ...(configs.length ? { configs } : {}),
       ...(service.restart ? { restart: service.restart } : {}),
       ...(container ? { container } : {}),
       ...(service.models ? { models: service.models } : {}),
