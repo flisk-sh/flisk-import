@@ -206,6 +206,64 @@ describe("Compose values Flisk cannot take as they are", () => {
     expect(text).toContain("no single HTTP container port could be identified");
   });
 
+  it("takes a private service's port from the localhost port its healthcheck calls, not a placeholder (nosia)", () => {
+    const { manifest, text } = plan(
+      [
+        "services:",
+        "  web:",
+        "    image: example/rails:1",
+        "    healthcheck:",
+        '      test: ["CMD", "curl", "-f", "http://localhost:3000/up"]',
+        "  worker:",
+        "    image: example/rails:1",
+        "    command: bundle exec rake jobs",
+      ].join("\n"),
+    );
+    expect(manifest("web").port).toBe(3000);
+    expect(manifest("web").exposeViaProxy).toBe(false);
+    expect(manifest("web")).not.toHaveProperty("extraPorts");
+    expect(text).not.toContain("port 3000 assigned");
+    // No port anywhere: still a placeholder from the 4000 range.
+    expect(manifest("worker").port).toBe(4000);
+  });
+
+  it("takes a private service's port from a single expose entry, before the healthcheck", () => {
+    const { manifest } = plan(
+      [
+        "services:",
+        "  api:",
+        "    image: example/api:1",
+        "    expose: ['8000/tcp']",
+        "    healthcheck:",
+        "      test: ['CMD-SHELL', 'wget -qO- http://127.0.0.1:9000/health']",
+        "  multi:",
+        "    image: example/multi:1",
+        "    expose: [8000, 8001]",
+      ].join("\n"),
+    );
+    expect(manifest("api").port).toBe(8000);
+    expect(manifest("api").exposeViaProxy).toBe(false);
+    expect(manifest("multi").port).toBe(4000);
+  });
+
+  it("does not read a port from a healthcheck that calls another host or a variable", () => {
+    const { manifest } = plan(
+      [
+        "services:",
+        "  alpha:",
+        "    image: example/alpha:1",
+        "    healthcheck:",
+        "      test: ['CMD', 'curl', '-f', 'http://other-service:3000/up']",
+        "  beta:",
+        "    image: example/beta:1",
+        "    healthcheck:",
+        "      test: ['CMD-SHELL', 'curl -f http://localhost:$${PORT:-3000}/up']",
+      ].join("\n"),
+    );
+    expect(manifest("alpha").port).toBe(4000);
+    expect(manifest("beta").port).toBe(4001);
+  });
+
   it("builds from the Dockerfile when Compose gives both build and image, and notes that image is not written", () => {
     tree({ "api/Dockerfile": "FROM busybox\n" });
     const { manifest, text } = plan(

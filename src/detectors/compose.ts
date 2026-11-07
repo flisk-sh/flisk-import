@@ -864,6 +864,34 @@ function healthPathOf(healthcheck: unknown): string | undefined {
   return path.split(/[?#]/)[0] || "/";
 }
 
+/** A literal port on localhost or 127.0.0.1 in a Compose healthcheck command (`curl -f http://localhost:3000/up` gives 3000). */
+const LOCAL_HEALTH_PORT =
+  /(?:^|[\s"'/@])(?:localhost|127\.0\.0\.1|0\.0\.0\.0):(\d{1,5})(?=[/\s"']|$)/i;
+
+function healthPortOf(healthcheck: unknown): number | undefined {
+  if (!isObj(healthcheck) || !Array.isArray(healthcheck.test)) return undefined;
+  const test = healthcheck.test
+    .filter((part): part is string => typeof part === "string")
+    .join(" ");
+  const port = Number(test.match(LOCAL_HEALTH_PORT)?.[1]);
+  return Number.isInteger(port) && port >= 1 && port <= 65535 ? port : undefined;
+}
+
+/** The one container port a Compose `expose:` list names ("3000", 3000, "3000/tcp"), or undefined for none or several. */
+function exposedPortOf(expose: unknown): number | undefined {
+  if (!Array.isArray(expose)) return undefined;
+  const ports = [
+    ...new Set(
+      expose
+        .map((entry) => String(entry).match(/^(\d{1,5})(?:\/tcp)?$/)?.[1])
+        .filter((p): p is string => p !== undefined)
+        .map(Number)
+        .filter((p) => p >= 1 && p <= 65535),
+    ),
+  ];
+  return ports.length === 1 ? ports[0] : undefined;
+}
+
 registerDetector({
   id: "compose",
   claim: (relPath) => /^(docker-)?compose\.ya?ml$/.test(relPath),
@@ -1394,6 +1422,18 @@ registerDetector({
       // Any single published port that is not a known database/broker port is treated as HTTP,
       // including 8000 and 8080; a service with no published port stays private, as in Compose.
       const exposeViaProxy = selectedPort !== undefined && !NON_HTTP_PORTS.has(selectedPort);
+      // A service that publishes nothing still listens somewhere inside its container. Flisk passes the service.json
+      // port to the container as $PORT, and apps such as Rails/Puma bind to it; an assigned placeholder (4000-4999)
+      // therefore moves the app off the port its own healthcheck probes, and the container never turns healthy
+      // (flisk#3348, dilolabs/nosia). So the port comes from a single `expose:` entry, or from the localhost port the
+      // healthcheck itself calls. It stays private either way: nothing new is published or routed.
+      const listenPort =
+        selectedPort ??
+        (ports.length === 0 && !healthOff
+          ? (exposedPortOf(raw.expose) ?? healthPortOf(raw.healthcheck))
+          : ports.length === 0
+            ? exposedPortOf(raw.expose)
+            : undefined);
 
       candidates.push({
         kind: "service",
@@ -1409,7 +1449,7 @@ registerDetector({
         ...(profiles ? { profiles } : {}),
         ...(envFile ? { envFile } : {}),
         ...(healthProbe !== undefined ? { healthCheck: healthProbe } : {}),
-        ...(selectedPort !== undefined ? { port: selectedPort } : {}),
+        ...(listenPort !== undefined ? { port: listenPort } : {}),
         ...(healthCheckPath ? { healthCheckPath } : {}),
         exposeViaProxy,
         ...(envKeys.length ? { envKeys } : {}),
