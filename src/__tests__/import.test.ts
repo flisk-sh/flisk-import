@@ -680,6 +680,10 @@ describe("Compose runtime keys (capabilities, ports, network_mode, volumes, rest
     ["'192.168.1.10:8080:7000'", { port: 7000, publish: "192.168.1.10:8080" }],
     ['"${APP_HTTP_BIND:-80}:7000"', { port: 7000, publish: "${APP_HTTP_BIND:-80}" }],
     ['"127.0.0.1:${APP_PORT:-8080}:7000"', { port: 7000, publish: "127.0.0.1:${APP_PORT:-8080}" }],
+    [
+      '"127.0.0.1:${APP_PORT:-7000}:${APP_PORT:-7000}"',
+      { port: 7000, publish: "127.0.0.1:${APP_PORT:-7000}" },
+    ],
     ["{ target: 7000, published: 8080 }", { port: 7000, publish: "8080" }],
     [
       "{ target: 7000, published: 8080, host_ip: 0.0.0.0 }",
