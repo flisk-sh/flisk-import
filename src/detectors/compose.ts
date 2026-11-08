@@ -30,12 +30,20 @@ import type {
 type Obj = Record<string, unknown>;
 const isObj = (v: unknown): v is Obj => typeof v === "object" && v !== null && !Array.isArray(v);
 
+/** A short-syntax mapping whose container side is `${VAR:-3000}` or `${VAR-3000}`, with that side replaced by its default. */
+function withDefaultContainerPort(mapping: string): string {
+  return mapping.replace(/\$\{\w+:?-(\d+)\}$/, "$1");
+}
+
 /** Container-side port of one `ports:` entry, in short or long syntax. */
 function containerPort(entry: unknown): number | undefined {
   if (typeof entry === "number") return entry;
   if (isObj(entry)) return typeof entry.target === "number" ? entry.target : undefined;
   if (typeof entry !== "string") return undefined;
-  const last = entry.split("/")[0]?.split(":").pop() ?? "";
+  const last =
+    withDefaultContainerPort(entry.split("/")[0] ?? "")
+      .split(":")
+      .pop() ?? "";
   const first = last.split("-")[0] ?? "";
   return /^\d+$/.test(first) ? Number.parseInt(first, 10) : undefined;
 }
@@ -357,7 +365,7 @@ function publishedPort(entry: unknown): ExtraPort | undefined {
     const [mapping, proto] = entry.split("/");
     if (proto === "udp") protocol = "udp";
     // [HOST_IP:][HOST_PORT:]CONTAINER_PORT, where the host side may hold ${VAR:-default}, which has colons of its own.
-    const match = (mapping ?? "").match(/^(?:(.*):)?([^:]+)$/);
+    const match = withDefaultContainerPort(mapping ?? "").match(/^(?:(.*):)?([^:]+)$/);
     const host = match?.[1];
     if (host === undefined) hostSide = hostSideOf(port, undefined, undefined);
     else if (host.includes("${")) hostSide = hostSideOf(port, undefined, host);
