@@ -182,6 +182,10 @@ export const EXPECTATIONS: Record<string, Expectation> = {
     services: { app: privateSvc },
     plan: ["ports not understood"],
   },
+  "interpolated-port-default": {
+    services: { app: svc({ match: { port: 3000 } }, routed) },
+    plan: ["port:      3000"],
+  },
   "partly-unreadable-ports": {
     services: { app: svc({ match: { port: 8080 } }, routed) },
     plan: ["port entries that were not understood and ignored", "only 8080 was read"],
