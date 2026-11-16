@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { relative, resolve as resolvePath } from "node:path";
 import { basename, dirname, isAbsolute, join, normalize } from "node:path/posix";
 import { isAlias, isMap, type Node, parseDocument, visit } from "yaml";
+import { ImportError } from "../errors.js";
 import {
   findProjectBoundary,
   findProjectRoot,
@@ -911,10 +912,18 @@ registerDetector({
 
     const doc = parseDocument(readFileSync(absPath, "utf8"), { merge: true });
     if (doc.errors.length > 0) {
-      return {
-        candidates,
-        skips: [{ ...base, reason: `invalid YAML: ${doc.errors[0]?.message}` }],
-      };
+      const error = doc.errors[0];
+      const start = error?.linePos?.[0];
+      const at = start ? ` at line ${start.line}, column ${start.col}` : "";
+      // The YAML message repeats its own position and appends the source line; the prefix already names both.
+      const detail = (error?.message ?? "could not be parsed").split("\n")[0]?.replace(
+        / at line \d+, column \d+:?$/,
+        "",
+      );
+      throw new ImportError(
+        `${relPath} is not valid YAML${at}: ${detail}`,
+        [`Fix ${relPath}; \`docker compose config\` reports the same parse error`],
+      );
     }
     let usesAnchors = false;
     visit(doc, {

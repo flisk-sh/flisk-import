@@ -14,7 +14,10 @@ export interface Expectation {
   services?: Record<string, ServiceCheck>;
   /** Services that must not be written. */
   notWritten?: string[];
+  /** Text the printed plan must contain. */
   plan?: string[];
+  /** Text the error output must contain. */
+  error?: string[];
 }
 
 /** Reached through Traefik: no `exposeViaProxy: false`. */
@@ -265,5 +268,8 @@ export const EXPECTATIONS: Record<string, Expectation> = {
     plan: ["dependsOn not written, not in this import: ghost"],
   },
   "all-skipped": { exit: 1, notWritten: ["only"], plan: ['service "only" uses `extends`'] },
-  "invalid-yaml": { exit: 1, plan: ["invalid YAML"] },
+  "invalid-yaml": {
+    exit: 1,
+    error: ["docker-compose.yml is not valid YAML at line ", "-> Fix docker-compose.yml"],
+  },
 };

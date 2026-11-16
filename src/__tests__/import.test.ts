@@ -11,6 +11,7 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { ImportError } from "../errors.js";
 import { formatPlan } from "../format.js";
 import { buildPlan } from "../plan.js";
 import { applyWrites, planWrites } from "../write.js";
@@ -124,6 +125,21 @@ describe("root Compose import", () => {
       "package.json": '{"scripts":{"start":"node app.js"}}',
     });
     expect(() => buildPlan(root)).toThrow(/No root docker-compose.yml found/);
+  });
+
+  it("refuses a root docker-compose.yml that does not parse, naming the file and line, instead of noting it as a skip", () => {
+    tree({ "docker-compose.yml": "services:\n  api:\n    image: [unclosed\n" });
+    let error: unknown;
+    try {
+      buildPlan(root);
+    } catch (err) {
+      error = err;
+    }
+    expect(error).toBeInstanceOf(ImportError);
+    expect((error as ImportError).message).toMatch(
+      /^docker-compose\.yml is not valid YAML at line 4, column \d+: .+/,
+    );
+    expect((error as ImportError).suggestions).not.toHaveLength(0);
   });
 
   it("names Compose files that docker compose would use but the importer does not read", () => {
