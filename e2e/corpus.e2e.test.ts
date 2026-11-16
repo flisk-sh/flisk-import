@@ -69,6 +69,7 @@ describe.each(names)("corpus: %s", (name) => {
     expect(existsSync(join(repo, "services"))).toBe(false);
     expect(existsSync(join(repo, ".flisk"))).toBe(false);
     for (const text of want().plan ?? []) expect(r.out).toContain(text);
+    for (const text of want().error ?? []) expect(r.err).toContain(text);
   });
 
   it("--yes writes manifests Flisk accepts, matching this fixture's expectations", () => {
@@ -77,6 +78,7 @@ describe.each(names)("corpus: %s", (name) => {
     const r = run([name, "--yes"]);
     expect(r.code).toBe(want().exit ?? 0);
     for (const text of want().plan ?? []) expect(r.out).toContain(text);
+    for (const text of want().error ?? []) expect(r.err).toContain(text);
 
     const written = manifests(repo);
     const expected = want().services ?? {};

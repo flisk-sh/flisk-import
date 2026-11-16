@@ -72,6 +72,9 @@ export function buildPlan(dir: string): ImportPlan {
       candidates.push(...result.candidates);
       skips.push(...result.skips);
     } catch (err) {
+      // The root file is the only input: a dedicated ImportError (such as invalid YAML) fails the
+      // import instead of leaving a skip note under an otherwise normal plan.
+      if (err instanceof ImportError) throw err;
       skips.push({
         file: composePath,
         detector: detector.id,

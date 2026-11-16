@@ -51,7 +51,7 @@ The plan names each of these. Nothing below is guessed.
 2. Use Flisk core **1.4.24 or later**. That release reads `container`, `extraPorts`, `sidecarOf` and `volumes` ([flisk#2911](https://github.com/flisk-sh/flisk/pull/2911), [#2912](https://github.com/flisk-sh/flisk/pull/2912), [#2914](https://github.com/flisk-sh/flisk/pull/2914), [#2917](https://github.com/flisk-sh/flisk/pull/2917)); an older core warns that they are unknown fields and runs the services without them. 1.3.104 added `buildContext` ([flisk#525](https://github.com/flisk-sh/flisk/pull/525)); 1.3.145 starts a project that has `.flisk/project.json` but no Tiltfile yet ([flisk#1018](https://github.com/flisk-sh/flisk/pull/1018)); the release after 1.4.10 accepts a bring-your-own port outside 4000-5999 and two-letter names ([flisk#2646](https://github.com/flisk-sh/flisk/pull/2646)). The importer does not check the installed version.
 3. Flisk injects its own `PORT`, `DATABASE_URL` and a `Host: <service>.<project>.localhost` header. An app that validates its host or reads `DATABASE_URL` may need configuration that Compose did not.
 
-The command exits 1 when nothing could be imported (an unreadable file, or every service skipped).
+The command exits 1 when nothing could be imported (an unreadable file, or every service skipped). A root Compose file that is not valid YAML is an error before any plan is printed: one `Error:` line names the file, line and column, with a `->` hint, and the exit code is 1.
 
 ## Import a Tiltfile
 

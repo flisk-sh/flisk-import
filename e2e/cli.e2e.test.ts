@@ -106,6 +106,19 @@ describe("flisk-import (built CLI)", () => {
     expect(existsSync(join(repo, "services"))).toBe(false);
   });
 
+  it("reports a root Compose file that does not parse as an Error with the file and line, and prints no plan", () => {
+    writeFileSync(join(repo, "docker-compose.yml"), "services:\n  api:\n    image: [unclosed\n");
+    const r = run(["shop", "--dry-run"]);
+    expect(r.code).toBe(1);
+    expect(r.err).toMatch(/^Error: docker-compose\.yml is not valid YAML at line 4, column \d+: /);
+    expect(r.err).toContain("-> Fix docker-compose.yml");
+    expect(r.out).not.toContain("Found");
+    expect(r.out).not.toContain("[create Flisk project]");
+    expect(r.out).not.toContain("Skipped");
+    expect(existsSync(join(repo, "services"))).toBe(false);
+    expect(existsSync(join(repo, ".flisk"))).toBe(false);
+  });
+
   it("reads compose.yaml when it is the only Compose file", () => {
     rmSync(join(repo, "docker-compose.yml"));
     writeFileSync(join(repo, "compose.yaml"), "services:\n  web:\n    image: nginx\n");
