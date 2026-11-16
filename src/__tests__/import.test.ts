@@ -1299,7 +1299,9 @@ describe("Compose command and entrypoint strings, split as Compose splits them",
 
   it("still refuses a carriage return and the Unicode line breaks", () => {
     for (const bad of ["a\\rb", "a\\u2028b", "a\\u0085b"]) {
-      const { text, of } = container(`services:\n  app:\n    image: app:1\n    command: ["sh", "-c", "${bad}"]\n`);
+      const { text, of } = container(
+        `services:\n  app:\n    image: app:1\n    command: ["sh", "-c", "${bad}"]\n`,
+      );
       expect(of("app")).toBeUndefined();
       expect(text).toContain("has an empty argument or a control character");
     }

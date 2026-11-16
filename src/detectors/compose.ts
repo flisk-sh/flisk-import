@@ -721,7 +721,11 @@ function containerCommandOf(
   if (!argv) return undefined;
   // A newline and a tab are fine (a multi-line `sh -c` script): Flisk writes them as \n and \t escapes.
   // biome-ignore lint/suspicious/noControlCharactersInRegex: Flisk refuses any other control character in a command
-  if (argv.some((part) => part === "" || /[\u0000-\u0008\u000b-\u001f\u007f\u0085\u2028\u2029]/.test(part)))
+  if (
+    argv.some(
+      (part) => part === "" || /[\u0000-\u0008\u000b-\u001f\u007f\u0085\u2028\u2029]/.test(part),
+    )
+  )
     return {
       note: "has an empty argument or a control character, which Flisk's container.command and container.entrypoint refuse; not written",
     };
