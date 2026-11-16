@@ -1289,6 +1289,23 @@ describe("Compose command and entrypoint strings, split as Compose splits them",
     expect(of("app")).toBeUndefined();
     expect(text).toContain("has an empty argument or a control character");
   });
+
+  it("keeps a multi-line sh -c script, newlines and tabs included", () => {
+    const { of } = container(
+      `services:\n  upgrade:\n    image: app:1\n    command:\n      - sh\n      - -c\n      - |\n        set -eu\n        echo "a: $$1"\n        \tdone\n`,
+    );
+    expect(of("upgrade")).toEqual({ command: ["sh", "-c", 'set -eu\necho "a: $$1"\n\tdone\n'] });
+  });
+
+  it("still refuses a carriage return and the Unicode line breaks", () => {
+    for (const bad of ["a\\rb", "a\\u2028b", "a\\u0085b"]) {
+      const { text, of } = container(
+        `services:\n  app:\n    image: app:1\n    command: ["sh", "-c", "${bad}"]\n`,
+      );
+      expect(of("app")).toBeUndefined();
+      expect(text).toContain("has an empty argument or a control character");
+    }
+  });
 });
 
 describe("Compose round trip: routed ports, healthchecks and env survive an export", () => {

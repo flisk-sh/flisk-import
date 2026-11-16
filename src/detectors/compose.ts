@@ -694,13 +694,17 @@ export function shellWords(text: string): string[] | undefined {
   return words;
 }
 
+// A newline and a tab are fine (a multi-line `sh -c` script): Flisk writes them as \n and \t escapes.
+// biome-ignore lint/suspicious/noControlCharactersInRegex: Flisk refuses any other control character in a command
+const REFUSED_COMMAND_CHAR = /[\u0000-\u0008\u000b-\u001f\u007f\u0085\u2028\u2029]/;
+
 /**
  * Compose `command`/`entrypoint` as the argument vector for service.json `container.command` / `container.entrypoint`.
  * A list is kept as it is; a string is split into words as Compose splits it, with no shell, so an image ENTRYPOINT
  * (minio) gets `server /export` as its arguments. `$$` and `${VAR}` stay as written: Flisk writes the vector into the
  * generated Compose file, where Compose reads them exactly as it did in the original file. Only a string whose quotes do
  * not balance runs through `sh -c`, and `note` says so. An empty `entrypoint` list is kept (it drops the image's ENTRYPOINT).
- * Elements Flisk would refuse (empty, or with a control character) give no vector, with a `note`.
+ * Elements Flisk would refuse (empty, or with a control character other than a newline or a tab) give no vector, with a `note`.
  */
 function containerCommandOf(
   command: unknown,
@@ -719,8 +723,7 @@ function containerCommandOf(
     if (command.length > 0 || allowEmpty) argv = command as string[];
   }
   if (!argv) return undefined;
-  // biome-ignore lint/suspicious/noControlCharactersInRegex: Flisk refuses a control character in a command
-  if (argv.some((part) => part === "" || /[\u0000-\u001f\u007f]/.test(part)))
+  if (argv.some((part) => part === "" || REFUSED_COMMAND_CHAR.test(part)))
     return {
       note: "has an empty argument or a control character, which Flisk's container.command and container.entrypoint refuse; not written",
     };
