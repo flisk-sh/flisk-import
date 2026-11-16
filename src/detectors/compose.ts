@@ -916,14 +916,12 @@ registerDetector({
       const start = error?.linePos?.[0];
       const at = start ? ` at line ${start.line}, column ${start.col}` : "";
       // The YAML message repeats its own position and appends the source line; the prefix already names both.
-      const detail = (error?.message ?? "could not be parsed").split("\n")[0]?.replace(
-        / at line \d+, column \d+:?$/,
-        "",
-      );
-      throw new ImportError(
-        `${relPath} is not valid YAML${at}: ${detail}`,
-        [`Fix ${relPath}; \`docker compose config\` reports the same parse error`],
-      );
+      const detail = (error?.message ?? "could not be parsed")
+        .split("\n")[0]
+        ?.replace(/ at line \d+, column \d+:?$/, "");
+      throw new ImportError(`${relPath} is not valid YAML${at}: ${detail}`, [
+        `Fix ${relPath}; \`docker compose config\` reports the same parse error`,
+      ]);
     }
     let usesAnchors = false;
     visit(doc, {
