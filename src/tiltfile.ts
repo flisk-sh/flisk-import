@@ -24,11 +24,11 @@ export interface TiltfilePlan {
   projectRoot: string;
   projectJson: string;
   orchestration: TiltfileOrchestration;
-  /** `create` when there is no `.flisk/project.json` yet; `update` keeps every other key. */
-  action: "create" | "update";
+  /** `create` when there is no `.flisk/project.json`; `update` keeps other keys; `unchanged` is already registered. */
+  action: "create" | "update" | "unchanged";
   /** The `orchestration` value `--force` replaces, if any. */
   replaced?: unknown;
-  /** The whole `.flisk/project.json` this import writes. */
+  /** The whole `.flisk/project.json`; unchanged plans retain the current file text. */
   content: string;
 }
 
@@ -66,6 +66,16 @@ export function describeOrchestration(value: unknown): string {
     return `${String(source)}: ${typeof path === "string" && path ? path : "default"}`;
   }
   return JSON.stringify(value);
+}
+
+function isSameOrchestration(value: unknown, expected: TiltfileOrchestration): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const orchestration = value as Record<string, unknown>;
+  return (
+    Object.keys(orchestration).length === 2 &&
+    orchestration.source === expected.source &&
+    orchestration.path === expected.path
+  );
 }
 
 /**
@@ -156,6 +166,16 @@ export function planTiltfileImport(
     );
   }
   const replaced = config.orchestration;
+  if (!options.force && isSameOrchestration(replaced, orchestration)) {
+    return {
+      tiltfile,
+      projectRoot,
+      projectJson,
+      orchestration,
+      action: "unchanged",
+      content: readFileSync(projectJson, "utf8"),
+    };
+  }
   if (replaced !== undefined && !options.force) {
     throw new ImportError(
       `.flisk/project.json already sets orchestration (${describeOrchestration(replaced)})`,
@@ -177,6 +197,7 @@ export function planTiltfileImport(
 
 /** Writes `.flisk/project.json`, and nothing else. The Tiltfile is never touched. */
 export function applyTiltfileImport(plan: TiltfilePlan): void {
+  if (plan.action === "unchanged") return;
   mkdirSync(dirname(plan.projectJson), { recursive: true });
   writeFileSync(plan.projectJson, plan.content, plan.action === "create" ? { flag: "wx" } : {});
 }
@@ -186,9 +207,11 @@ export function formatTiltfilePlan(plan: TiltfilePlan): string {
   const status =
     plan.action === "create"
       ? "create Flisk project"
-      : plan.replaced !== undefined
-        ? `update, replaces orchestration (${describeOrchestration(plan.replaced)}) (--force)`
-        : "update, other keys kept";
+      : plan.action === "unchanged"
+        ? "already registered; no changes"
+        : plan.replaced !== undefined
+          ? `update, replaces orchestration (${describeOrchestration(plan.replaced)}) (--force)`
+          : "update, other keys kept";
   return [
     `Found ${plan.orchestration.path} in ${plan.projectRoot}`,
     "The Tiltfile is not changed: flisk up runs it as it is.",
