@@ -103,6 +103,10 @@ program
     };
     const plan = planTiltfileImport(path, { force: options.force });
 
+    if (plan.action === "unchanged") {
+      console.log("Nothing to write: .flisk/project.json already registers this Tiltfile.");
+      return;
+    }
     console.log(formatTiltfilePlan(plan));
     if (options.dryRun) return void console.log("Dry run: nothing written.");
     const target =
