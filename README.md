@@ -2,11 +2,35 @@
 
 Import the services in a repo's root `docker-compose.yml` into [Flisk](https://github.com/flisk-sh/flisk) as `service.json` files, or register the repo's own Tiltfile so `flisk up` runs it. This is the Compose first tier of flisk-sh/flisk#511.
 
+## Quick start
+
+The published package provides its own `flisk-import` bin, so you do not need the core `flisk` CLI or a clone of this repository. From the folder that holds your `docker-compose.yml`:
+
 ```bash
-flisk import . --dry-run     # plan only
-flisk import .               # plan, then ask before writing
-flisk import . --yes         # write service.json files and project setup
+npx flisk-import . --dry-run     # npm
+bunx flisk-import . --dry-run    # bun
 ```
+
+Drop `--dry-run` to write the plan, or add `--yes` to write without the prompt. Plain `flisk-import [dir]` is the Compose import; `flisk import [dir]` is the same command through the core CLI.
+
+A one-service Compose file (`web: nginx:alpine`, publishing `8080:80`) produces a plan like this:
+
+```text
+Found 1 service(s) and 0 job(s) in ./fi
+Read only: docker-compose.yml. Lines below name what was not translated.
+
+  .flisk/project.json  [create Flisk project]
+
+  web  (service)
+    from:      docker-compose.yml [compose]
+    image:     nginx:alpine
+    port:      80 (from Compose)
+    proxy:     routed through Traefik
+    health:    / (assumed)
+    write:     services/fi/web/service.json  [create]
+```
+
+The full plan also lists translation notes and a "Skipped / not fully imported" section; nothing is written in a dry run.
 
 ## What to expect
 
@@ -45,6 +69,8 @@ flisk import tiltfile dev/Tiltfile --yes # a named file, or a folder that holds 
 - **Needs** a Flisk core that runs an imported Tiltfile ([flisk#2849](https://github.com/flisk-sh/flisk/pull/2849)). The importer does not check the core version.
 
 Plain `flisk-import [dir]` is still the Compose import. To import Compose from a folder named `tiltfile`, write `flisk-import ./tiltfile`.
+
+## Development
 
 ```bash
 bun install && bun run build && bun run test
