@@ -55,6 +55,27 @@ const NON_HTTP_PORTS = new Set([
 ]);
 
 /**
+ * Default container ports for database images that publish nothing. Compose itself does not move a
+ * service onto a port just because its image is a database; Flisk would otherwise assign a 4000-range
+ * port that the container is not listening on (flisk#94). Only the image name before the tag is used;
+ * a variable tag such as `postgres:${POSTGRES_VERSION:-18}-alpine` still resolves to `postgres`.
+ */
+const DATABASE_IMAGE_PORTS: Record<string, number> = {
+  postgres: 5432,
+  postgresql: 5432,
+  mysql: 3306,
+  mariadb: 3306,
+  redis: 6379,
+  mongo: 27017,
+  mongodb: 27017,
+};
+
+function defaultPortOfImage(image: string): number | undefined {
+  const name = image.split("@")[0]?.split(":")[0]?.split("/").pop() ?? "";
+  return DATABASE_IMAGE_PORTS[name];
+}
+
+/**
  * Service keys this detector translates. Every other key is named in the report: Flisk runs a
  * bring-your-own container without command overrides, env files and the rest.
  * `healthcheck` only contributes an HTTP path; `environment` only contributes names. The runtime keys
@@ -1444,14 +1465,16 @@ registerDetector({
       // port to the container as $PORT, and apps such as Rails/Puma bind to it; an assigned placeholder (4000-4999)
       // therefore moves the app off the port its own healthcheck probes, and the container never turns healthy
       // (flisk#3348, dilolabs/nosia). So the port comes from a single `expose:` entry, or from the localhost port the
-      // healthcheck itself calls. It stays private either way: nothing new is published or routed.
+      // healthcheck itself calls, or from the default container port of a well-known database image (flisk#94).
+      // It stays private either way: nothing new is published or routed.
       const listenPort =
         selectedPort ??
-        (ports.length === 0 && !healthOff
-          ? (exposedPortOf(raw.expose) ?? healthPortOf(raw.healthcheck))
-          : ports.length === 0
-            ? exposedPortOf(raw.expose)
-            : undefined);
+        (ports.length === 0
+          ? (healthOff
+              ? exposedPortOf(raw.expose)
+              : (exposedPortOf(raw.expose) ?? healthPortOf(raw.healthcheck))) ??
+            (typeof raw.image === "string" ? defaultPortOfImage(raw.image) : undefined)
+          : undefined);
 
       candidates.push({
         kind: "service",

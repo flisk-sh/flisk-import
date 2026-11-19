@@ -23,7 +23,7 @@ Each Compose service becomes `services/<stack>/<service>/service.json`, where th
 | `ulimits` | `container.ulimits`: a whole number, or `{ soft, hard }` |
 | `container_name` | dropped with a note: Flisk names containers itself, and other services reach it by its service name |
 | one published container port (for example 80, 3000, 5432 or 8080) | `port`, unchanged, because the image already listens there. A bring-your-own port is the port inside its own container: nothing is published on your machine and Traefik reaches it on the stack network, so two services may both use 5432. |
-| no single container port | a placeholder port from 4000-5999, and the service stays private (no route). |
+| no single container port | a placeholder port from 4000-5999, and the service stays private (no route). Exception: an unpublished well-known database image (`postgres`, `mysql`/`mariadb`, `redis`, `mongo`) gets its default container port (5432, 3306, 6379, 27017) instead, so the recorded port matches where the container actually listens; these stay private too. |
 | `healthcheck` (`test`, `interval`, `timeout`, `retries`, `start_period`) | `healthCheck.command`, `interval`, `timeout`, `retries` and `startPeriod` in seconds, kept even when an HTTP path is also read (Flisk then probes with the command, which an export writes back as the Compose `healthcheck`). |
 | HTTP URL, `host:port/path` or `localhost/path` in `healthcheck.test` | `healthCheckPath`. When no path can be read, `/` is assumed and the plan says so. |
 | `depends_on` | `dependsOn`, limited to services in this import |
