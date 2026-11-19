@@ -22,7 +22,7 @@
     "prepare": "npm run build",
     "build": "tsc --project tsconfig.build.json && chmod +x dist/cli.js",
     "typecheck": "tsc --noEmit",
-    "lint": "biome check .",
+    "lint": "biome check . --error-on-warnings",
     "test": "vitest run"
   },
   "dependencies": {
