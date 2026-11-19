@@ -6,7 +6,6 @@ import { isAlias, isMap, type Node, parseDocument, visit } from "yaml";
 import { ImportError } from "../errors.js";
 import {
   findProjectBoundary,
-  findProjectRoot,
   HEALTH_CHECK_PATH_PATTERN,
   isAnyAbsolute,
   isPathWithin,
@@ -1367,10 +1366,12 @@ registerDetector({
             continue;
           }
           if (topSec.file) {
+            // A long-form entry may omit target or give one Compose cannot read as a path; mount at the usual place.
+            const target = targetPath ?? `/run/secrets/${sourceName}`;
             secretFiles.push({
               name: sourceName,
               source: topSec.file,
-              target: targetPath!,
+              target,
               ...(uid !== undefined ? { uid } : {}),
               ...(gid !== undefined ? { gid } : {}),
               ...(mode !== undefined ? { mode } : {}),
@@ -1425,10 +1426,12 @@ registerDetector({
             continue;
           }
           if (topCfg.file) {
+            // A long-form entry may omit target or give one Compose cannot read as a path; mount at the usual place.
+            const target = targetPath ?? `/${sourceName}`;
             configs.push({
               name: sourceName,
               source: topCfg.file,
-              target: targetPath!,
+              target,
               ...(uid !== undefined ? { uid } : {}),
               ...(gid !== undefined ? { gid } : {}),
               ...(mode !== undefined ? { mode } : {}),
