@@ -2312,3 +2312,42 @@ secrets:
     ).toBe(true);
   });
 });
+
+describe("unpublished well-known database images (flisk#94)", () => {
+  it("uses the image's default container port instead of assigning one", () => {
+    tree({
+      "docker-compose.yml": `
+services:
+  pg:
+    image: postgres:16
+    environment: [POSTGRES_PASSWORD=secret]
+  my:
+    image: mysql:8
+  redis:
+    image: redis:7-alpine
+  mongo:
+    image: mongo:6
+  web:
+    image: nginx:1
+`,
+    });
+
+    const plan = buildPlan(root);
+    const writes = planWrites(plan, false);
+    applyWrites(writes);
+    const manifest = (name: string) => JSON.parse(readFileSync(serviceJson(name), "utf8"));
+
+    expect(manifest("pg").port).toBe(5432);
+    expect(manifest("my").port).toBe(3306);
+    expect(manifest("redis").port).toBe(6379);
+    expect(manifest("mongo").port).toBe(27017);
+    expect(manifest("web").port).toBeGreaterThanOrEqual(4000);
+
+    const byName = new Map(writes.items.map((i) => [i.service.name, i]));
+    expect(byName.get("pg")?.manifest.exposeViaProxy).toBe(false);
+    expect(byName.get("my")?.manifest.exposeViaProxy).toBe(false);
+    expect(byName.get("redis")?.manifest.exposeViaProxy).toBe(false);
+    expect(byName.get("mongo")?.manifest.exposeViaProxy).toBe(false);
+    expect(formatPlan(plan, writes)).toContain("port:      5432 (from Compose)");
+  });
+});
