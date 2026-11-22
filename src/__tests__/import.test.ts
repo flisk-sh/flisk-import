@@ -899,7 +899,8 @@ describe("Compose command, healthcheck, ports and restart", () => {
   }
 
   it("reads docker-compose.yaml", () => {
-    expect(buildPlan((tree({ "docker-compose.yaml": compose }), root)).services).toHaveLength(3);
+    tree({ "docker-compose.yaml": compose });
+    expect(buildPlan(root).services).toHaveLength(3);
   });
 
   it("writes the Compose command as container.command and keeps the image (no Dockerfile)", () => {
@@ -1973,6 +1974,51 @@ describe("an uppercase project folder (Lychee)", () => {
 });
 
 describe("Compose file-backed secrets: and configs: (flisk#3059)", () => {
+  it("uses the default target when a long-form mount has a non-string target", () => {
+    tree({
+      "docker-compose.yml": `
+services:
+  web:
+    image: nginx:1
+    secrets:
+      - source: api_key
+        target: 123
+    configs:
+      - source: app_cfg
+        target: false
+
+secrets:
+  api_key:
+    file: ./secrets/api.key
+
+configs:
+  app_cfg:
+    file: ./configs/app.conf
+`,
+      "secrets/api.key": "SECRET",
+      "configs/app.conf": "CONFIG",
+    });
+
+    const writes = planWrites(buildPlan(root), false);
+    applyWrites(writes);
+    const web = JSON.parse(readFileSync(serviceJson("web"), "utf8"));
+
+    expect(web.secrets.files).toEqual([
+      {
+        name: "api_key",
+        source: "../../../secrets/api.key",
+        target: "/run/secrets/api_key",
+      },
+    ]);
+    expect(web.configs).toEqual([
+      {
+        name: "app_cfg",
+        source: "../../../configs/app.conf",
+        target: "/app_cfg",
+      },
+    ]);
+  });
+
   it("imports file-backed secrets and configs in short and long syntax with targets and permissions", () => {
     tree({
       "docker-compose.yml": `
