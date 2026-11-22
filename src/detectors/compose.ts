@@ -1470,10 +1470,10 @@ registerDetector({
       const listenPort =
         selectedPort ??
         (ports.length === 0
-          ? (healthOff
+          ? ((healthOff
               ? exposedPortOf(raw.expose)
               : (exposedPortOf(raw.expose) ?? healthPortOf(raw.healthcheck))) ??
-            (typeof raw.image === "string" ? defaultPortOfImage(raw.image) : undefined)
+            (typeof raw.image === "string" ? defaultPortOfImage(raw.image) : undefined))
           : undefined);
 
       candidates.push({
