@@ -82,6 +82,13 @@ export function toResourceName(raw: string): string {
   return name;
 }
 
+// Flisk's service schema caps appName at 64 characters and disallows a trailing hyphen.
+const MAX_APP_NAME_LENGTH = 64;
+
+function fitResourceName(base: string, suffix = ""): string {
+  return `${base.slice(0, MAX_APP_NAME_LENGTH - suffix.length).replace(/-+$/, "")}${suffix}`;
+}
+
 /**
  * Maps every raw name in one project to a distinct resource name. Names that are already valid
  * claim their spelling first; the rest get a numeric suffix when they would collide (for example
@@ -93,12 +100,12 @@ export function assignResourceNames(rawNames: string[]): Map<string, string> {
   const out = new Map<string, string>();
   const claim = (raw: string) => {
     const base = toResourceName(raw);
-    let final = base;
-    for (let n = 2; claimed.has(final); n++) final = `${base}-${n}`;
+    let final = fitResourceName(base);
+    for (let n = 2; claimed.has(final); n++) final = fitResourceName(base, `-${n}`);
     claimed.add(final);
     out.set(raw, final);
   };
-  const isValid = (raw: string) => toResourceName(raw) === raw;
+  const isValid = (raw: string) => raw.length <= MAX_APP_NAME_LENGTH && toResourceName(raw) === raw;
   unique.filter(isValid).forEach(claim);
   unique.filter((raw) => !isValid(raw)).forEach(claim);
   return out;
@@ -228,7 +235,7 @@ export function mergeCandidates(candidates: Candidate[], rootName: string): Merg
     ...candidates.flatMap((c) => (c.sidecarOf ? [c.sidecarOf] : [])),
     ...candidates.flatMap((c) => (c.name === undefined ? [basename(c.dir) || rootName] : [])),
   ]);
-  const resolve = (raw: string) => table.get(raw) ?? toResourceName(raw);
+  const resolve = (raw: string) => table.get(raw) ?? fitResourceName(toResourceName(raw));
   const groups = new Map<string, { name: string; dir: string; members: Candidate[] }>();
   const keyOf = (dir: string, name: string) => `${dir}\0${name}`;
 
