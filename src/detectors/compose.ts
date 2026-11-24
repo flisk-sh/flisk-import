@@ -1152,6 +1152,12 @@ registerDetector({
         dir = resolved === "." ? "" : resolved;
         standalone = false;
         dockerfile = typeof build.dockerfile === "string" ? build.dockerfile : "Dockerfile";
+        if (typeof build.target === "string" && build.target.length > 0) {
+          skips.push({
+            ...base,
+            reason: `service "${name}" build.target ${JSON.stringify(build.target)} is not imported; Flisk builds the Dockerfile's default (final) stage`,
+          });
+        }
       }
 
       const ports = [
