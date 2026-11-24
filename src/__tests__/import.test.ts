@@ -118,6 +118,30 @@ describe("root Compose import", () => {
     expect(readFileSync(file, "utf8")).toBe('{"userOwned":true}\n');
   });
 
+  it("reports a dropped Compose build target without dropping the service", () => {
+    tree({
+      "docker-compose.yml": [
+        "services:",
+        "  vote:",
+        "    build:",
+        "      context: ./vote",
+        "      target: dev",
+        "  result:",
+        "    build: ./result",
+      ].join("\n"),
+      "vote/Dockerfile": "FROM alpine AS dev\nFROM alpine AS prod\n",
+      "result/Dockerfile": "FROM alpine\n",
+    });
+    const plan = buildPlan(root);
+    const writes = planWrites(plan, false);
+    const output = formatPlan(plan, writes);
+    expect(output).toContain(
+      'service "vote" build.target "dev" is not imported; Flisk builds the Dockerfile\'s default (final) stage',
+    );
+    expect(output).not.toContain('service "result" build.target');
+    expect(writes.items.map((item) => item.service.name).sort()).toEqual(["result", "vote"]);
+  });
+
   it("refuses a missing root docker-compose.yml instead of walking for other inputs", () => {
     tree({
       "nested/docker-compose.yml": compose,
