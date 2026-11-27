@@ -88,6 +88,103 @@ describe("dockerfile detector", () => {
     });
   });
 
+  it("combines an exec ENTRYPOINT and exec CMD as Docker does", () => {
+    const absPath = join(root, "Dockerfile");
+    writeFileSync(
+      absPath,
+      [
+        "FROM node:22-alpine",
+        'ENTRYPOINT ["node", "--inspect"]',
+        'CMD ["server.js", "--port", "4000"]',
+        "",
+      ].join("\n"),
+    );
+
+    const [detector] = selectDetectors(["dockerfile"]);
+    if (!detector) throw new Error("dockerfile detector not registered");
+    const result = detector.parse(absPath, "Dockerfile");
+
+    expect(result.candidates[0]?.command).toBe("node --inspect server.js --port 4000");
+  });
+
+  it("imports an exec ENTRYPOINT when there is no CMD", () => {
+    const absPath = join(root, "Dockerfile");
+    writeFileSync(
+      absPath,
+      ["FROM node:22-alpine", 'ENTRYPOINT ["node", "server.js"]', ""].join("\n"),
+    );
+
+    const [detector] = selectDetectors(["dockerfile"]);
+    if (!detector) throw new Error("dockerfile detector not registered");
+    const result = detector.parse(absPath, "Dockerfile");
+
+    expect(result.candidates[0]?.command).toBe("node server.js");
+  });
+
+  it("imports a shell ENTRYPOINT with and without CMD as Docker runs it", () => {
+    const absPath = join(root, "Dockerfile");
+    const [detector] = selectDetectors(["dockerfile"]);
+    if (!detector) throw new Error("dockerfile detector not registered");
+
+    writeFileSync(absPath, ["FROM node:22-alpine", "ENTRYPOINT node server.js", ""].join("\n"));
+    expect(detector.parse(absPath, "Dockerfile").candidates[0]?.command).toBe("node server.js");
+
+    writeFileSync(
+      absPath,
+      ["FROM node:22-alpine", "ENTRYPOINT node --trace-warnings", 'CMD ["server.js"]', ""].join(
+        "\n",
+      ),
+    );
+    expect(detector.parse(absPath, "Dockerfile").candidates[0]?.command).toBe(
+      "node --trace-warnings",
+    );
+  });
+
+  it("keeps a shell CMD as written when there is no ENTRYPOINT", () => {
+    const absPath = join(root, "Dockerfile");
+    writeFileSync(absPath, ["FROM node:22-alpine", "CMD node server.js --watch", ""].join("\n"));
+
+    const [detector] = selectDetectors(["dockerfile"]);
+    if (!detector) throw new Error("dockerfile detector not registered");
+    const result = detector.parse(absPath, "Dockerfile");
+
+    expect(result.candidates[0]?.command).toBe("node server.js --watch");
+  });
+
+  it("passes a shell CMD to an exec ENTRYPOINT through the shell Docker adds", () => {
+    const absPath = join(root, "Dockerfile");
+    writeFileSync(
+      absPath,
+      ["FROM node:22-alpine", 'ENTRYPOINT ["node"]', "CMD server.js --watch", ""].join("\n"),
+    );
+
+    const [detector] = selectDetectors(["dockerfile"]);
+    if (!detector) throw new Error("dockerfile detector not registered");
+    const result = detector.parse(absPath, "Dockerfile");
+
+    expect(result.candidates[0]?.command).toBe("node /bin/sh -c server.js --watch");
+  });
+
+  it("resets ENTRYPOINT on each FROM so an earlier stage is not prepended", () => {
+    const absPath = join(root, "Dockerfile");
+    writeFileSync(
+      absPath,
+      [
+        "FROM node:22 AS builder",
+        'ENTRYPOINT ["npm", "run", "build"]',
+        "FROM node:22-slim",
+        'CMD ["node", "dist/index.js"]',
+        "",
+      ].join("\n"),
+    );
+
+    const [detector] = selectDetectors(["dockerfile"]);
+    if (!detector) throw new Error("dockerfile detector not registered");
+    const result = detector.parse(absPath, "Dockerfile");
+
+    expect(result.candidates[0]?.command).toBe("node dist/index.js");
+  });
+
   it("resets ports, command, and skips on each FROM so earlier stages do not leak into the final stage", () => {
     const absPath = join(root, "Dockerfile");
     const [detector] = selectDetectors(["dockerfile"]);
@@ -118,6 +215,7 @@ describe("dockerfile detector", () => {
       [
         "FROM node:22 AS builder",
         "EXPOSE 3000",
+        'ENTRYPOINT ["npm", "run", "build"]',
         'CMD ["npm", "run", "build"]',
         "FROM nginx:alpine",
         "",

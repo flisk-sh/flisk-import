@@ -25,18 +25,47 @@ function instructions(text: string): { line: number; text: string }[] {
   return out;
 }
 
-function cmdToString(args: string): string {
+type DockerfileCommand = { form: "exec"; argv: string[] } | { form: "shell"; text: string };
+
+function parseCommand(args: string): DockerfileCommand {
   if (args.startsWith("[")) {
     try {
       const parsed = JSON.parse(args);
       if (Array.isArray(parsed) && parsed.every((p) => typeof p === "string")) {
-        return parsed.join(" ");
+        return { form: "exec", argv: parsed };
       }
     } catch {
       // not exec form after all: fall through and keep the text
     }
   }
-  return args;
+  return { form: "shell", text: args };
+}
+
+function execToString(argv: string[]): string {
+  return argv.join(" ");
+}
+
+function commandToString(command: DockerfileCommand): string {
+  return command.form === "exec" ? execToString(command.argv) : command.text;
+}
+
+/**
+ * The command Docker runs, in the text form the detector already uses for CMD. Docker appends CMD
+ * to an exec ENTRYPOINT. A shell CMD becomes a `/bin/sh -c` argument in that append. A shell
+ * ENTRYPOINT already runs through the shell, so Docker does not use CMD with it.
+ */
+function combinedCommand(
+  entrypoint: DockerfileCommand | undefined,
+  cmd: DockerfileCommand | undefined,
+): string | undefined {
+  if (!entrypoint) {
+    const command = cmd ? commandToString(cmd) : undefined;
+    return command || undefined;
+  }
+  if (entrypoint.form === "shell") return entrypoint.text || undefined;
+  if (!cmd) return execToString(entrypoint.argv) || undefined;
+  if (cmd.form === "exec") return execToString([...entrypoint.argv, ...cmd.argv]) || undefined;
+  return execToString([...entrypoint.argv, "/bin/sh", "-c", cmd.text]) || undefined;
 }
 
 registerDetector({
@@ -47,7 +76,8 @@ registerDetector({
     let skips: Skip[] = [];
     // Only the last build stage is the image that runs.
     let ports: number[] = [];
-    let command: string | undefined;
+    let entrypoint: DockerfileCommand | undefined;
+    let cmd: DockerfileCommand | undefined;
     for (const ins of instructions(readFileSync(absPath, "utf8"))) {
       const [keyword = "", ...rest] = ins.text.split(/\s+/);
       const args = rest.join(" ");
@@ -55,7 +85,8 @@ registerDetector({
         case "FROM":
           ports = [];
           skips = [];
-          command = undefined;
+          entrypoint = undefined;
+          cmd = undefined;
           break;
         case "EXPOSE":
           for (const token of rest) {
@@ -74,8 +105,11 @@ registerDetector({
             }
           }
           break;
+        case "ENTRYPOINT":
+          entrypoint = parseCommand(args);
+          break;
         case "CMD":
-          command = cmdToString(args);
+          cmd = parseCommand(args);
           break;
       }
     }
@@ -87,6 +121,7 @@ registerDetector({
         reason: `EXPOSE lists several ports (${distinct.join(", ")}); port not imported`,
       });
     }
+    const command = combinedCommand(entrypoint, cmd);
     const candidate: Candidate = {
       kind: "service",
       dir,
