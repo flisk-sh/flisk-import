@@ -987,7 +987,7 @@ registerDetector({
       absComposeDir,
       ...(composeDir ? composeDir.split("/").map(() => "..") : []),
     );
-    const projectRoot = findProjectBoundary(absComposeDir);
+    const projectRoot = findProjectBoundary(planRoot);
 
     interface TopLevelDef {
       name: string;

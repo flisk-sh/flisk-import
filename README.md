@@ -1,14 +1,20 @@
 # flisk import
 
-Import the services in a repo's root `docker-compose.yml` into [Flisk](https://github.com/flisk-sh/flisk) as `service.json` files, or register the repo's own Tiltfile so `flisk up` runs it. This is the Compose first tier of flisk-sh/flisk#511.
+Import the services in a repo's Compose file into [Flisk](https://github.com/flisk-sh/flisk) as `service.json` files, or register the repo's own Tiltfile so `flisk up` runs it. This is the Compose first tier of flisk-sh/flisk#511.
 
 ## Quick start
 
-The package ships its own `flisk-import` bin, so you do not need the core `flisk` CLI to try it. From a folder with a root `docker-compose.yml`:
+The package ships its own `flisk-import` bin, so you do not need the core `flisk` CLI to try it. From a folder with a root Compose file:
 
 ```bash
 npx flisk-import . --dry-run     # npm
 bunx flisk-import . --dry-run    # or Bun
+```
+
+Without `--file`, the root file is selected in Docker Compose's order: `compose.yaml`, `compose.yml`, `docker-compose.yml`, then `docker-compose.yaml`. When more than one exists, the highest-precedence file is read and the rest are named in the plan. Pass `--file <path>` for another filename or a file in a subdirectory; the path is resolved inside the selected project directory and cannot leave it:
+
+```bash
+npx flisk-import . --file deploy/compose.prod.yml --dry-run
 ```
 
 For a one-service Compose file using `node:22-alpine` and port `3000`, the plan starts like this:
@@ -32,7 +38,7 @@ flisk import . --yes         # write service.json files and project setup
 
 ## What to expect
 
-- **Reads one project:** the root `docker-compose.yml`, or `compose.yaml`, `compose.yml` or `docker-compose.yaml` when that is absent, through `docker compose config --no-interpolate --no-env-resolution --no-path-resolution` when docker compose is installed, so `include:`, `extends` and anchors are resolved as `docker compose up` resolves them (wger keeps db, cache and powersync in `services/*.yaml`), `${VAR}` templates stay as written, and an included file's paths stay relative to its own folder. Without docker compose (or with `FLISK_IMPORT_DOCKER=0`) the file is read as YAML, and the plan says when that leaves `include` or `extends` unresolved. Not override files, Dockerfiles on their own, `package.json`, or Procfiles.
+- **Reads one project:** one Compose file, selected with `--file <path>` or by Docker Compose's root-file precedence (`compose.yaml`, `compose.yml`, `docker-compose.yml`, `docker-compose.yaml`), through `docker compose config --no-interpolate --no-env-resolution --no-path-resolution` when docker compose is installed, so `include:`, `extends` and anchors are resolved as `docker compose up` resolves them (wger keeps db, cache and powersync in `services/*.yaml`), `${VAR}` templates stay as written, and an included file's paths stay relative to its own folder. Without docker compose (or with `FLISK_IMPORT_DOCKER=0`) the file is read as YAML, and the plan says when that leaves `include` or `extends` unresolved. Not override files, Dockerfiles on their own, `package.json`, or Procfiles.
 - **Writes:** one bring-your-own `service.json` per Compose service, plus `.flisk/project.json` if the repo is not a Flisk project yet. It never edits the Compose file or overwrites a `service.json` without `--force`.
 - **Keeps the install's data:** each named volume gets `name`, the Docker volume `docker compose up` created (`<project>_<volume>`, its own `name:`, or an `external` volume), so `flisk up` mounts the same data with no copy (needs the Flisk release with flisk#2964).
 - **Keeps:** `profiles` (the service starts only with `flisk up --profile`), `env_file` as `envFile`, `tmpfs` and `deploy.resources.limits` (`container.tmpfs`, `cpus`, `memory`).
@@ -46,7 +52,7 @@ flisk import . --yes         # write service.json files and project setup
 - **Keeps:** a `command` or `entrypoint` as `container.command` / `container.entrypoint` (Flisk 1.4.31; a list as it is, a string split into exec-form arguments as Compose splits it, with no shell, so `command: server /export` on `minio/minio` stays the arguments of its `ENTRYPOINT`; `$$` and `${VAR}` are written as they are, because Flisk puts them into a Compose file again; only a string with unbalanced quotes runs through `sh -c`, and the plan says so; an empty argument, or a control character other than a newline or a tab, is refused by Flisk and not written; the same for a service with `build:`), a `healthcheck` as `healthCheck.command`, a published database port as `extraPorts`, and `restart: on-failure:N` with its retry limit (N from 1 to 100).
 - **Drops, and says so:** `command` on a service with a `build`, `env_file` and every other untranslated key; anonymous volumes and paths outside the project; `network_mode` other than `service:<name>`; services with invalid profile names, `extends`, an out-of-tree build, or an image with characters or variable forms other than `${NAME}`, `${NAME:-default}` and `${NAME-default}` (`postgres:${POSTGRES_VERSION:-18}-alpine` is written as it is).
 - **Does not start anything.** Run `flisk up` with Flisk core **1.4.31 or later** (`container.entrypoint` needs it; dependsOn conditions, buildArgs, logging, bind paths from the environment, SELinux labels and `${NAME:?message}` images need 1.4.28). The importer does not check the core version.
-- **Exit codes:** `0` when the plan succeeds (`--dry-run`, files written, or all `service.json` files already exist), `1` when no root `docker-compose.yml` is found, the root Compose file does not parse, or no mappable service is found, and `2` when the write prompt is declined or closed without an answer (`Nothing written.`).
+- **Exit codes:** `0` when the plan succeeds (`--dry-run`, files written, or all `service.json` files already exist), `1` when no supported root Compose file is found, `--file` is invalid, the selected Compose file does not parse, or no mappable service is found, and `2` when the write prompt is declined or closed without an answer (`Nothing written.`).
 
 See [docs/import.md](docs/import.md) for the full mapping and limits. `flisk import` is the core CLI command backed by this package.
 

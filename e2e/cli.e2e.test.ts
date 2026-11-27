@@ -98,11 +98,11 @@ describe("flisk-import (built CLI)", () => {
     expect(existsSync(join(repo, "services", "shop", "api", "service.json"))).toBe(true);
   });
 
-  it("requires the root docker-compose.yml and ignores nested files", () => {
+  it("requires a root Compose file and ignores nested files", () => {
     rmSync(join(repo, "docker-compose.yml"));
     const r = run(["shop", "--dry-run"]);
     expect(r.code).toBe(1);
-    expect(r.err).toContain("No root docker-compose.yml found");
+    expect(r.err).toContain("No root Compose file found");
     expect(existsSync(join(repo, "services"))).toBe(false);
   });
 
