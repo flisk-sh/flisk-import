@@ -580,23 +580,24 @@ describe("environment from Compose", () => {
     "",
   ].join("\n");
 
-  it("writes names as secrets and literal values to the gitignored project .env", () => {
+  it("writes secret-shaped values to the gitignored project .env and keeps plain literals in env", () => {
     tree({ "docker-compose.yml": compose, ".env": "API_TOKEN=keep-me\n" });
     const writes = planWrites(buildPlan(root), false);
     applyWrites(writes);
     const api = JSON.parse(readFileSync(serviceJson("api"), "utf8"));
     const db = JSON.parse(readFileSync(serviceJson("db"), "utf8"));
-    // A pure ${API_TOKEN} holds no secret itself: it is committed and read from .env at start.
-    expect(api.env).toEqual({ API_TOKEN: "${API_TOKEN}" });
-    expect(api.secrets).toEqual({ required: ["DATABASE_URL"] });
-    expect(db.secrets).toEqual({ required: ["POSTGRES_PASSWORD"] });
+    // A bare credential reference has no value in the Compose file, so it stays a required secret.
+    expect(api).not.toHaveProperty("env");
+    expect(api.secrets).toEqual({ required: ["API_TOKEN", "DATABASE_URL"] });
+    expect(db.env).toEqual({ POSTGRES_PASSWORD: "example" });
+    expect(db).not.toHaveProperty("secrets");
     expect(readFileSync(serviceJson("api"), "utf8")).not.toContain("postgres://");
 
     const env = readFileSync(join(root, ".env"), "utf8");
     expect(env).toContain("API_TOKEN=keep-me\n");
     expect(env).not.toContain("${API_TOKEN}");
     expect(env).toContain("DATABASE_URL=postgres://app:example@db:5432/app\n");
-    expect(env).toContain("POSTGRES_PASSWORD=example\n");
+    expect(env).not.toContain("POSTGRES_PASSWORD=");
     expect(readFileSync(join(root, ".gitignore"), "utf8").split("\n")).toContain(".env");
 
     const api_item = writes.items.find((i) => i.service.name === "api");
@@ -605,11 +606,42 @@ describe("environment from Compose", () => {
     );
   });
 
+  it("keeps a literal credential in env and reserves secrets for interpolated values", () => {
+    tree({
+      "docker-compose.yml": [
+        "services:",
+        "  db:",
+        "    image: postgres:16",
+        "    environment:",
+        "      POSTGRES_USER: postgres",
+        "      POSTGRES_PASSWORD: postgres",
+        "  worker:",
+        "    image: example/worker:1",
+        "    environment:",
+        "      DB_PASSWORD: ${DB_PASSWORD}",
+        "",
+      ].join("\n"),
+      ".env": "EXISTING=1\n",
+    });
+    const writes = planWrites(buildPlan(root), false);
+    applyWrites(writes);
+    const db = JSON.parse(readFileSync(serviceJson("db"), "utf8"));
+    const worker = JSON.parse(readFileSync(serviceJson("worker"), "utf8"));
+    expect(db.env).toEqual({ POSTGRES_PASSWORD: "postgres", POSTGRES_USER: "postgres" });
+    expect(db).not.toHaveProperty("secrets");
+    expect(worker).not.toHaveProperty("env");
+    expect(worker.secrets).toEqual({ required: ["DB_PASSWORD"] });
+    expect(writes.env.add).not.toHaveProperty("POSTGRES_PASSWORD");
+    expect(readFileSync(join(root, ".env"), "utf8")).toBe("EXISTING=1\n");
+  });
+
   it("names a value it could not copy", () => {
     tree({ "docker-compose.yml": compose });
     const writes = planWrites(buildPlan(root), false);
     const api = writes.items.find((i) => i.service.name === "api");
-    expect(api?.notes).toContain("env reads API_TOKEN from the project .env; add them there");
+    expect(api?.notes).toContain(
+      "no literal value in docker-compose.yml for API_TOKEN; add it to the project .env",
+    );
     expect(writes.env.add).not.toHaveProperty("API_TOKEN");
   });
 
@@ -835,12 +867,13 @@ describe("environment values that cannot be secrets go into service.json env", (
     "    image: redis:7",
   ].join("\n");
 
-  it("commits literals and ${VAR} references, and keeps credential names and values that hold one secret", () => {
+  it("commits plain literals and references, and keeps secret-shaped values and bare credential references secret", () => {
     tree({ "docker-compose.yml": compose });
     const writes = planWrites(buildPlan(root), false);
     applyWrites(writes);
     const app = JSON.parse(readFileSync(serviceJson("app"), "utf8"));
     expect(app.env).toEqual({
+      API_KEY: "12345",
       CACHE: "redis:6379",
       ENABLED: "true",
       EXTERNAL: "https://example.com/",
@@ -850,21 +883,24 @@ describe("environment values that cannot be secrets go into service.json env", (
       PROXY: "socks5://tubehaus-vpn:1080",
       PUBLIC_URL: "${APP_URL}",
       RETRIES: "3",
-      SESSION_TTL: "${SESSION_TTL}",
     });
-    // A credential name and a URL with a password stay out of service.json.
-    expect(app.secrets).toEqual({ required: ["API_KEY", "DB_URL"] });
+    // A URL with a password and a bare credential reference stay out of service.json.
+    expect(app.secrets).toEqual({ required: ["DB_URL", "SESSION_TTL"] });
     expect(readFileSync(serviceJson("app"), "utf8")).not.toContain("hunter2");
     const env = readFileSync(join(root, ".env"), "utf8");
     expect(env).toContain("DB_URL=postgres://user:hunter2@invidious-db/app\n");
     expect(env).not.toContain("HT_INVIDIOUS=");
+    expect(env).not.toContain("API_KEY=");
   });
 
-  it("names the variables a committed ${VAR} reference needs, but not one with a default", () => {
+  it("names the variables a committed ${VAR} reference needs, and a bare credential reference it could not copy", () => {
     tree({ "docker-compose.yml": compose });
     const writes = planWrites(buildPlan(root), false);
     const notes = writes.items.find((i) => i.service.name === "app")?.notes.join("\n");
-    expect(notes).toContain("env reads APP_URL, SESSION_TTL from the project .env; add them there");
+    expect(notes).toContain("env reads APP_URL from the project .env; add them there");
+    expect(notes).toContain(
+      "no literal value in docker-compose.yml for SESSION_TTL; add it to the project .env",
+    );
     expect(notes).not.toContain("APP_PORT");
   });
 });
@@ -1369,7 +1405,7 @@ describe("Compose round trip: routed ports, healthchecks and env survive an expo
     expect(text).toContain("is kept as Compose wrote it; Flisk probes with it instead of /up");
   });
 
-  it("commits pure Compose expressions whatever their name, and literals unless they hold a credential", () => {
+  it("commits pure Compose expressions with defaults and plain literals, and keeps secret-shaped values secret", () => {
     const { manifest } = imported(
       [
         "services:",
@@ -1383,25 +1419,29 @@ describe("Compose round trip: routed ports, healthchecks and env survive an expo
         "      PMA_HOST: lychee_db",
         "      MODE: worker",
         "      DB_PASS: literal",
+        "      POSTGRES_PASSWORD: password",
         "      DSN: mysql://root:pw@db/app",
         "      HOOK: https://hooks.example.com/x?token=abc",
         "      BLOB: AbCdEf0123456789AbCdEf0123456789xyz",
+        "      API_TOKEN: AbCdEf0123456789AbCdEf0123456789xyz",
         "      NOTE: my-secret-value",
         '      MIXED: "x${A}"',
       ].join("\n"),
     );
     expect(manifest("api").env).toEqual({
       APP_KEY: "${APP_KEY:-}",
+      DB_PASS: "literal",
       DB_PASSWORD: "${DB_PASSWORD:-password}",
       MIXED: "x${A}",
       MODE: "worker",
       NESTED: "${A:-${B:-file}}",
       PMA_HOST: "lychee_db",
       PORT_DASH: "${PORT-8080}",
+      POSTGRES_PASSWORD: "password",
     });
     expect(manifest("api").secrets.required.sort()).toEqual([
+      "API_TOKEN",
       "BLOB",
-      "DB_PASS",
       "DSN",
       "HOOK",
       "NOTE",
@@ -1419,7 +1459,7 @@ describe("a project .env that git tracks (Symfony-style committed defaults)", ()
     "      NTFY_LISTEN_HTTP: ':80'",
     "      NTFY_VISITOR_REQUEST_LIMIT_REPLENISH: 5s",
     "      NTFY_AUTH_FILE: /var/lib/ntfy/auth.db",
-    "      API_TOKEN: s3cr3t",
+    "      API_TOKEN: AbCdEf0123456789AbCdEf0123456789xyz",
   ].join("\n");
   const tracked = "APP_ENV=dev\n";
 
@@ -1436,7 +1476,9 @@ describe("a project .env that git tracks (Symfony-style committed defaults)", ()
     const { writes, manifest } = importTracked("/.env.local\n");
     expect(readFileSync(join(root, ".env"), "utf8")).toBe(tracked);
     expect(readFileSync(join(root, ".gitignore"), "utf8")).toBe("/.env.local\n");
-    expect(readFileSync(join(root, ".env.local"), "utf8")).toContain("API_TOKEN=s3cr3t\n");
+    expect(readFileSync(join(root, ".env.local"), "utf8")).toContain(
+      "API_TOKEN=AbCdEf0123456789AbCdEf0123456789xyz\n",
+    );
     expect(writes.env).toMatchObject({ tracked: ".env" });
     expect(manifest.envFile).toEqual(["../../../.env.local"]);
     expect(manifest.secrets).toEqual({ required: ["API_TOKEN"] });
@@ -1446,7 +1488,7 @@ describe("a project .env that git tracks (Symfony-style committed defaults)", ()
     const { manifest } = importTracked("vendor/\n");
     expect(readFileSync(join(root, ".env"), "utf8")).toBe(tracked);
     expect(readFileSync(join(root, ".flisk", ".env.import"), "utf8")).toContain(
-      "API_TOKEN=s3cr3t\n",
+      "API_TOKEN=AbCdEf0123456789AbCdEf0123456789xyz\n",
     );
     expect(readFileSync(join(root, ".gitignore"), "utf8")).toBe("vendor/\n.flisk/.env.import\n");
     expect(manifest.envFile).toEqual(["../../../.flisk/.env.import"]);

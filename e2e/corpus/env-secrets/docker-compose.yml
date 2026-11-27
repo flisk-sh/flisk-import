@@ -3,8 +3,8 @@ services:
     image: example/api:1
     ports: ["4000:4000"]
     environment:
-      - API_KEY=SECRET_TOKEN_list
-      - PLAIN=SECRET_TOKEN_plain
+      - API_KEY=SECRET_TOKEN_list_0123456789abcdef
+      - PLAIN=SECRET_TOKEN_plain_0123456789abcdef
   worker:
     image: example/worker:1
     environment:

@@ -162,10 +162,13 @@ export const EXPECTATIONS: Record<string, Expectation> = {
           match: {
             image: "mariadb:${MARIADB_VERSION:-11}",
             healthCheck: { command: ["healthcheck.sh", "--connect"], startPeriod: 30 },
-            env: { MYSQL_ROOT_PASSWORD: "${DB_ROOT_PASSWORD:-rootpassword}" },
-            secrets: { required: ["MYSQL_PASSWORD"] },
+            env: {
+              MYSQL_ROOT_PASSWORD: "${DB_ROOT_PASSWORD:-rootpassword}",
+              MYSQL_PASSWORD: "example",
+            },
             container: { networkAliases: ["lychee_db"] },
           },
+          without: ["secrets"],
         },
         privateSvc,
       ),
