@@ -565,7 +565,7 @@ export function manifestRelPath(plan: ImportPlan, item: WriteItem): string {
 
 /** The project name `docker compose` gives the imported Compose file: its `name:`, else its folder's name. */
 function composeProjectNameOf(plan: ImportPlan): string | undefined {
-  const file = plan.files.find((f) => /^(docker-)?compose\.ya?ml$/.test(f));
+  const file = plan.files[0];
   if (!file) return undefined;
   const absPath = join(plan.root, file);
   try {

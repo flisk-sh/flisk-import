@@ -124,7 +124,7 @@ describe("root Compose import", () => {
       Dockerfile: "FROM nginx\n",
       "package.json": '{"scripts":{"start":"node app.js"}}',
     });
-    expect(() => buildPlan(root)).toThrow(/No root docker-compose.yml found/);
+    expect(() => buildPlan(root)).toThrow(/No root Compose file found/);
   });
 
   it("refuses a root docker-compose.yml that does not parse, naming the file and line, instead of noting it as a skip", () => {
@@ -142,16 +142,110 @@ describe("root Compose import", () => {
     expect((error as ImportError).suggestions).not.toHaveLength(0);
   });
 
-  it("names Compose files that docker compose would use but the importer does not read", () => {
+  it.each([
+    {
+      expected: "compose.yaml",
+      present: ["compose.yaml", "compose.yml", "docker-compose.yml", "docker-compose.yaml"],
+    },
+    {
+      expected: "compose.yml",
+      present: ["compose.yml", "docker-compose.yml", "docker-compose.yaml"],
+    },
+    {
+      expected: "docker-compose.yml",
+      present: ["docker-compose.yml", "docker-compose.yaml"],
+    },
+    {
+      expected: "docker-compose.yml",
+      present: ["docker-compose.yml"],
+    },
+  ])(
+    "uses Docker Compose's root filename precedence to choose $expected",
+    ({ expected, present }) => {
+      const files: Record<string, string> = {};
+      for (const [index, file] of present.entries()) {
+        files[file] = `services:\n  svc${index}:\n    image: nginx\n`;
+      }
+      tree(files);
+
+      const plan = buildPlan(root);
+      expect(plan.files).toEqual([expected]);
+      expect(plan.services.map((service) => service.name)).toEqual([
+        `svc${present.indexOf(expected)}`,
+      ]);
+
+      const text = formatPlan(plan, planWrites(plan, false));
+      expect(text).toContain(`Read only: ${expected}`);
+      for (const file of present.filter((name) => name !== expected)) {
+        expect(text).toContain(`${file} [compose]: not read`);
+      }
+    },
+  );
+
+  it("reads the highest-precedence Compose file and names the files it does not read", () => {
     tree({
       "docker-compose.yml": compose,
       "docker-compose.override.yml": "services:\n  api:\n    ports: ['9000:4000']\n",
       "compose.yaml": "services:\n  other:\n    image: nginx\n",
     });
-    const text = formatPlan(buildPlan(root), planWrites(buildPlan(root), false));
+    const plan = buildPlan(root);
+    expect(plan.files).toEqual(["compose.yaml"]);
+    expect(plan.services.map((service) => service.name)).toEqual(["other"]);
+
+    const text = formatPlan(plan, planWrites(plan, false));
     expect(text).toContain("docker-compose.override.yml [compose]: not applied");
-    expect(text).toContain("compose.yaml [compose]: not read; `docker compose` prefers it");
-    expect(text).not.toContain("other");
+    expect(text).toContain("docker-compose.yml [compose]: not read");
+    expect(text).toContain("other");
+  });
+
+  it("keeps the Compose project name from an explicit file", () => {
+    tree({
+      "deploy/compose.prod.yml": "name: prodshop\nservices:\n  web:\n    image: nginx\n",
+    });
+
+    const writes = planWrites(buildPlan(root, { file: "deploy/compose.prod.yml" }), false);
+
+    expect(writes.composeProjectName).toBe("prodshop");
+    expect(writes.projectConfig?.content).toContain('"shop": "prodshop"');
+  });
+
+  it("resolves paths in an explicit nested Compose file from that file's directory", () => {
+    tree({
+      "deploy/compose.prod.yml": [
+        "services:",
+        "  api:",
+        "    build: ../api",
+        "    volumes: ['../data:/data']",
+        "    secrets:",
+        "      - app_secret",
+        "",
+        "secrets:",
+        "  app_secret:",
+        "    file: ../shared/app.key",
+      ].join("\n"),
+      "api/Dockerfile": "FROM node:22\n",
+      "shared/app.key": "SECRET",
+    });
+
+    const before = process.env.FLISK_IMPORT_DOCKER;
+    process.env.FLISK_IMPORT_DOCKER = "0";
+    try {
+      const plan = buildPlan(root, { file: "deploy/compose.prod.yml" });
+      const api = plan.services.find((service) => service.name === "api");
+
+      expect(plan.skips.some((skip) => skip.reason.includes("is outside the project root"))).toBe(
+        false,
+      );
+      expect(api).toMatchObject({
+        dir: "api",
+        dockerfile: "Dockerfile",
+        volumes: [{ source: "data", target: "/data", bind: true }],
+        secretFiles: [{ source: "shared/app.key" }],
+      });
+    } finally {
+      if (before === undefined) delete process.env.FLISK_IMPORT_DOCKER;
+      else process.env.FLISK_IMPORT_DOCKER = before;
+    }
   });
 
   it("reports Helm Chart.yaml and both kustomization.yaml and kustomization.yml as unsupported skips", () => {

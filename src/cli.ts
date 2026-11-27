@@ -26,22 +26,23 @@ async function confirm(message: string): Promise<boolean> {
 
 const program = new Command("flisk-import")
   .version(JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")).version)
-  .description("Import services from the root docker-compose.yml into Flisk")
+  .description("Import services from a Compose file into Flisk")
   // Options after `tiltfile` belong to it, so `tiltfile --dry-run` is not read as the Compose import's --dry-run.
   .enablePositionalOptions()
-  .argument("[dir]", "Directory containing docker-compose.yml", ".")
+  .argument("[dir]", "Directory containing the Compose file", ".")
+  .option("--file <path>", "Compose file to read, resolved inside the project directory")
   .option("--dry-run", "Print the plan and write nothing", false)
   .option("--yes", "Write without prompting", false)
   .option("--force", "Overwrite an existing service.json", false)
   .action(async (dir: string, options) => {
-    const plan = buildPlan(dir);
+    const plan = buildPlan(dir, { file: options.file });
     const writes = planWrites(plan, options.force);
 
     console.log(formatPlan(plan, writes));
 
     const pending = writes.items.filter((i) => i.status !== "exists");
     if (plan.services.length === 0) {
-      console.log("Nothing to import: no service in docker-compose.yml could be mapped.");
+      console.log(`Nothing to import: no service in ${plan.files[0]} could be mapped.`);
       process.exitCode = 1;
       return;
     }
@@ -71,7 +72,7 @@ const program = new Command("flisk-import")
     const copied = Object.keys(writes.env.add);
     if (copied.length)
       console.log(
-        `  - Copied ${copied.length} environment value(s) from docker-compose.yml to ${envFile} (gitignored).`,
+        `  - Copied ${copied.length} environment value(s) from ${plan.files[0]} to ${envFile} (gitignored).`,
       );
     if (writes.env.tracked && copied.length)
       console.log(

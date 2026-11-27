@@ -248,7 +248,7 @@ describe("flisk-import tiltfile (built CLI)", () => {
 
     const noCompose = run(["--dry-run"]);
     expect(noCompose.code).toBe(1);
-    expect(noCompose.err).toContain("No root docker-compose.yml found");
+    expect(noCompose.err).toContain("No root Compose file found");
   });
 
   it("lists the subcommand in --help", () => {

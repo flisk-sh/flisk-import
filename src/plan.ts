@@ -1,7 +1,8 @@
 import { readdirSync, readFileSync, statSync } from "node:fs";
-import { basename, resolve } from "node:path";
+import { basename, relative, resolve } from "node:path";
 import "./detectors/index.js";
 import { ImportError } from "./errors.js";
+import { isPathWithin } from "./flisk.js";
 import { type MergedService, mergeCandidates } from "./merge.js";
 import { selectDetectors } from "./registry.js";
 import { scanTree } from "./scan.js";
@@ -20,9 +21,8 @@ export interface ImportPlan {
   files: string[];
 }
 
-const COMPOSE_FILE = "docker-compose.yml";
-/** Names `docker compose` also picks up, in its own order of preference. They are read only when docker-compose.yml is absent. */
-const OTHER_COMPOSE_FILES = ["compose.yaml", "compose.yml", "docker-compose.yaml"];
+/** Root Compose filenames in the order `docker compose` prefers them. */
+const COMPOSE_FILES = ["compose.yaml", "compose.yml", "docker-compose.yml", "docker-compose.yaml"];
 /** Files `docker compose up` merges over the main file; none of them is applied. */
 const OVERRIDE_FILES = [
   "compose.override.yaml",
@@ -31,8 +31,41 @@ const OVERRIDE_FILES = [
   "docker-compose.override.yml",
 ];
 
-/** Read the one supported input, the root Compose file. This function writes nothing. */
-export function buildPlan(dir: string): ImportPlan {
+export interface BuildPlanOptions {
+  /** Compose file selected with `--file`, resolved inside the import root. */
+  file?: string;
+}
+
+/** Validate a `--file` path and return it relative to the import root. */
+function explicitComposePath(root: string, file: string): string {
+  const abs = resolve(root, file);
+  if (!isPathWithin(root, abs)) {
+    throw new ImportError(
+      `--file ${file} escapes the project directory; it must stay inside ${root}`,
+      ["Pass a Compose file inside the project directory"],
+    );
+  }
+  const stat = statSync(abs, { throwIfNoEntry: false });
+  if (!stat) {
+    throw new ImportError(`--file ${file} does not exist in the project directory ${root}`, [
+      "Pass an existing Compose file inside the project directory",
+    ]);
+  }
+  if (stat.isDirectory()) {
+    throw new ImportError(`--file ${file} is a directory, not a Compose file`, [
+      "Pass the Compose file itself, such as compose.yaml or deploy/compose.prod.yml",
+    ]);
+  }
+  if (!stat.isFile()) {
+    throw new ImportError(`--file ${file} is not a regular file`, [
+      "Pass a Compose file inside the project directory",
+    ]);
+  }
+  return relative(root, abs).split("\\").join("/");
+}
+
+/** Read the one selected Compose input. This function writes nothing. */
+export function buildPlan(dir: string, options: BuildPlanOptions = {}): ImportPlan {
   const root = resolve(dir);
   if (!statSync(root, { throwIfNoEntry: false })?.isDirectory()) {
     throw new Error(`${dir} is not a directory`);
@@ -43,30 +76,39 @@ export function buildPlan(dir: string): ImportPlan {
   const isFile = (name: string) =>
     statSync(resolve(root, name), { throwIfNoEntry: false })?.isFile() ?? false;
 
-  const present = OTHER_COMPOSE_FILES.filter(isFile);
-  const composePath = isFile(COMPOSE_FILE) ? COMPOSE_FILE : present[0];
+  const present = COMPOSE_FILES.filter(isFile);
+  const composePath =
+    options.file === undefined ? present[0] : explicitComposePath(root, options.file);
   if (!composePath) {
     throw new ImportError(
-      `No root docker-compose.yml found in ${root} (nor compose.yaml); flisk import reads only the root Compose file`,
-      ["Run flisk import in the directory that holds docker-compose.yml (or compose.yaml)"],
+      `No root Compose file found in ${root} (looked for ${COMPOSE_FILES.join(", ")})`,
+      [
+        `Run flisk import in the directory that holds one of ${COMPOSE_FILES.join(", ")}, or pass --file <path>`,
+      ],
     );
   }
   for (const name of present.filter((n) => n !== composePath)) {
     skips.push({
       file: name,
       detector: "compose",
-      reason: `not read; \`docker compose\` prefers it over ${composePath}, so what it runs may differ from this plan`,
+      reason:
+        options.file === undefined
+          ? `not read; \`docker compose\` prefers ${composePath} over it`
+          : `not read; --file selected ${composePath}`,
     });
   }
   for (const name of OVERRIDE_FILES.filter(isFile)) {
     skips.push({
       file: name,
       detector: "compose",
-      reason: `not applied; \`docker compose up\` merges it over ${composePath}, flisk import does not`,
+      reason:
+        options.file === undefined
+          ? `not applied; \`docker compose up\` merges it over ${composePath}, flisk import does not`
+          : "not applied; flisk import reads only the selected Compose file",
     });
   }
   for (const detector of detectors) {
-    if (!detector.claim(composePath)) continue;
+    if (options.file === undefined && !detector.claim(composePath)) continue;
     try {
       const result = detector.parse(resolve(root, composePath), composePath);
       candidates.push(...result.candidates);
