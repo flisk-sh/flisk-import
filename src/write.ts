@@ -2,7 +2,12 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, relative, resolve } from "node:path";
 import { parse as parseYaml } from "yaml";
-import { composeTemplateText, isComposeExpression, projectNameOf } from "./detectors/compose.js";
+import {
+  composeTemplateText,
+  isComposeExpression,
+  isNonHttpImage,
+  projectNameOf,
+} from "./detectors/compose.js";
 import { ImportError } from "./errors.js";
 import {
   BYO_PORT_RANGE,
@@ -120,10 +125,6 @@ function existingPort(path: string): number | undefined {
  * Maps merged services onto Flisk bring-your-own manifests. This is the only stage that knows the
  * layout `<project>/services/<stack>/<name>/service.json`. Nothing is written here.
  */
-/** Images that serve a protocol other than HTTP. Matched against the image name, not its tag. */
-const NON_HTTP_IMAGE =
-  /(^|\/)(postgres|mysql|mariadb|mongo|mongodb|redis|valkey|memcached|minio|mailpit|mailhog|rabbitmq|kafka|zookeeper|elasticsearch|opensearch|openssh-server)(:|@|$)/i;
-
 export function planWrites(plan: ImportPlan, force: boolean): WritePlan {
   const projectRoot = findProjectBoundary(plan.root);
   const stack = toResourceName(basename(plan.root));
@@ -240,7 +241,7 @@ export function planWrites(plan: ImportPlan, force: boolean): WritePlan {
     // Infrastructure images and one-shot jobs do not serve HTTP, so an assumed "/" would only
     // fail the probe. Leave the path out; the runtime then skips the HTTP probe.
     const nonHttp =
-      service.kind === "job" || (service.image !== undefined && NON_HTTP_IMAGE.test(service.image));
+      service.kind === "job" || (service.image !== undefined && isNonHttpImage(service.image));
     const healthOff = service.healthCheck === false;
     const healthCheckPath =
       isPrivate || nonHttp || healthOff ? undefined : (service.healthCheckPath ?? "/");

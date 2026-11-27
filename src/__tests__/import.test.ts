@@ -511,6 +511,47 @@ describe("health path for non-HTTP services", () => {
     expect(api.healthCheckPath).toBe("/health");
     expect(db).not.toHaveProperty("healthCheckPath");
   });
+
+  it("routes Mailpit as HTTP and keeps Postgres private without contradicting itself", () => {
+    tree({
+      "docker-compose.yml": [
+        "services:",
+        "  mail:",
+        "    image: axllent/mailpit:v1",
+        "    ports: ['8025:8025']",
+        "  db:",
+        "    image: postgres:16",
+        "    command: postgres -p 5433",
+        "    ports: ['5433']",
+      ].join("\n"),
+    });
+    const plan = buildPlan(root);
+    const writes = planWrites(plan, false);
+    const manifest = (name: string) =>
+      writes.items.find((i) => i.service.name === name)?.manifest as Record<string, unknown>;
+    const text = formatPlan(plan, writes);
+
+    expect(manifest("mail")).toMatchObject({ port: 8025, healthCheckPath: "/" });
+    expect(manifest("mail")).not.toHaveProperty("exposeViaProxy");
+    expect(manifest("db")).toMatchObject({ port: 5433, exposeViaProxy: false });
+    expect(manifest("db")).not.toHaveProperty("healthCheckPath");
+    expect(manifest("db").extraPorts).toEqual([{ port: 5433 }]);
+
+    const serviceBlock = (name: string) => {
+      const start = text.indexOf(`  ${name}  (`);
+      return text.slice(start, text.indexOf("\n\n", start));
+    };
+    const mailBlock = serviceBlock("mail");
+    const dbBlock = serviceBlock("db");
+    expect(mailBlock).toContain("proxy:     routed through Traefik");
+    expect(dbBlock).toContain("proxy:     none, private");
+    for (const block of [mailBlock, dbBlock]) {
+      expect(
+        block.includes("proxy:     routed through Traefik") &&
+          block.includes("the service does not serve HTTP"),
+      ).toBe(false);
+    }
+  });
 });
 
 describe("service names that normalise to the same value", () => {
