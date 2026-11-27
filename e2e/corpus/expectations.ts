@@ -164,7 +164,7 @@ export const EXPECTATIONS: Record<string, Expectation> = {
             healthCheck: { command: ["healthcheck.sh", "--connect"], startPeriod: 30 },
             env: {
               MYSQL_ROOT_PASSWORD: "${DB_ROOT_PASSWORD:-rootpassword}",
-              MYSQL_PASSWORD: "s3cr3t-literal",
+              MYSQL_PASSWORD: "example",
             },
             container: { networkAliases: ["lychee_db"] },
           },
