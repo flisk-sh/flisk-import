@@ -53,6 +53,14 @@ const NON_HTTP_PORTS = new Set([
   22, 25, 1883, 2181, 3306, 5432, 5672, 6379, 9092, 9200, 11211, 27017,
 ]);
 
+/** Images whose primary service protocol is not HTTP. Matched against the image name, not its tag. */
+const NON_HTTP_IMAGE =
+  /(^|\/)(postgres|mysql|mariadb|mongo|mongodb|redis|valkey|memcached|rabbitmq|kafka|zookeeper|openssh-server)(:|@|$)/i;
+
+export function isNonHttpImage(image: string): boolean {
+  return NON_HTTP_IMAGE.test(image);
+}
+
 /**
  * Default container ports for database images that publish nothing. Compose itself does not move a
  * service onto a port just because its image is a database; Flisk would otherwise assign a 4000-range
@@ -1287,12 +1295,19 @@ registerDetector({
           reason: `service "${name}" ${key} ${JSON.stringify(raw[key])} has values Flisk does not accept; not used`,
         });
       }
+      // Any single published port that is not a known database/broker port is treated as HTTP,
+      // including 8000 and 8080. A service whose image primarily serves another protocol, or one
+      // with no published port, stays private.
+      const nonHttpImage = typeof raw.image === "string" && isNonHttpImage(raw.image);
+      const exposeViaProxy =
+        selectedPort !== undefined && !NON_HTTP_PORTS.has(selectedPort) && !nonHttpImage;
       // Every published port stays published on the same host address (service.json extraPorts). The routed port too,
       // when Compose gives it a host side ("${APP_PORT:-8000}:8000"), so the app is still reachable without Traefik
       // (and in an exported docker-compose.yml); a bare routed "8000" is reached through Traefik only.
-      const proxied = selectedPort !== undefined && !NON_HTTP_PORTS.has(selectedPort);
       const extraPorts = (Array.isArray(raw.ports) ? raw.ports : [])
-        .filter((entry) => containerPort(entry) !== selectedPort || !proxied || hasHostSide(entry))
+        .filter(
+          (entry) => containerPort(entry) !== selectedPort || !exposeViaProxy || hasHostSide(entry),
+        )
         .map(publishedPort)
         .filter((p): p is ExtraPort => p !== undefined);
       let sidecarOf: string | undefined;
@@ -1461,9 +1476,6 @@ registerDetector({
         }
       }
 
-      // Any single published port that is not a known database/broker port is treated as HTTP,
-      // including 8000 and 8080; a service with no published port stays private, as in Compose.
-      const exposeViaProxy = selectedPort !== undefined && !NON_HTTP_PORTS.has(selectedPort);
       // A service that publishes nothing still listens somewhere inside its container. Flisk passes the service.json
       // port to the container as $PORT, and apps such as Rails/Puma bind to it; an assigned placeholder (4000-4999)
       // therefore moves the app off the port its own healthcheck probes, and the container never turns healthy
