@@ -25,6 +25,7 @@ export interface MergedService {
   kind: CandidateKind;
   image?: string;
   dockerfile?: string;
+  buildTarget?: string;
   command?: string;
   containerCommand?: string[];
   containerEntrypoint?: string[];
@@ -132,6 +133,7 @@ function firstOf<
     | "secretFiles"
     | "configs"
     | "restart"
+    | "buildTarget"
     | "containerCommand"
     | "containerEntrypoint"
     | "healthCheck"
@@ -170,6 +172,7 @@ function mergeGroup(
     ...firstOf(ordered, "secretFiles"),
     ...firstOf(ordered, "configs"),
     ...firstOf(ordered, "restart"),
+    ...firstOf(ordered, "buildTarget"),
     ...firstOf(ordered, "containerCommand"),
     ...firstOf(ordered, "containerEntrypoint"),
     ...firstOf(ordered, "models"),

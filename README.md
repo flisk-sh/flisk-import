@@ -20,6 +20,24 @@ Read only: docker-compose.yml. Lines below name what was not translated.
   .flisk/project.json  [create Flisk project]
 ```
 
+For a service with extra ports, mounts, a profile and a dependency, the service block shows what will be written, not only what was dropped: image or build context, port and extra ports, volumes and bind mounts, healthcheck path and command, dependencies with conditions, profiles, and environment split into committed params and required secrets. For example:
+
+```text
+  web  (service)
+    from:      docker-compose.yml [compose]
+    image:     node:22-alpine
+    port:      3000 (from Compose)
+    extraPorts: 9229->9229/tcp
+    proxy:     routed through Traefik
+    volumes:   ./web:/app (bind, read-only, written as ../../../web), web-data:/data (named, docker name demo_web-data)
+    health:    /health
+    healthcheck: ["curl","-f","http://localhost:3000/health"] (interval 5s, timeout 3s, retries 12)
+    depends:   db (service_healthy)
+    profiles:  debug
+    env:       NODE_ENV, SECRET_TOKEN (committed params: NODE_ENV; required secrets: SECRET_TOKEN)
+    write:     services/demo/web/service.json  [create]
+```
+
 Drop `--dry-run` to plan and confirm the writes, or add `--yes` to write the `service.json` files and project setup without a prompt.
 
 If you already have the core `flisk` CLI, the same importer is available as:

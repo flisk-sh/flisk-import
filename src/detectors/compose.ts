@@ -1132,6 +1132,7 @@ registerDetector({
 
       let dir = composeDir;
       let dockerfile: string | undefined;
+      let buildTarget: string | undefined;
       let standalone = true;
       if (raw.build !== undefined) {
         const build = isObj(raw.build) ? raw.build : { context: raw.build };
@@ -1152,6 +1153,7 @@ registerDetector({
         dir = resolved === "." ? "" : resolved;
         standalone = false;
         dockerfile = typeof build.dockerfile === "string" ? build.dockerfile : "Dockerfile";
+        if (typeof build.target === "string" && build.target.length > 0) buildTarget = build.target;
       }
 
       const ports = [
@@ -1486,6 +1488,7 @@ registerDetector({
         standalone,
         ...(typeof raw.image === "string" ? { image: raw.image } : {}),
         ...(dockerfile ? { dockerfile } : {}),
+        ...(buildTarget ? { buildTarget } : {}),
         ...(command ? { command } : {}),
         ...(containerCommand ? { containerCommand } : {}),
         ...(containerEntrypoint ? { containerEntrypoint } : {}),
