@@ -22,6 +22,8 @@ export interface Candidate {
   image?: string;
   /** Dockerfile path relative to `dir`. */
   dockerfile?: string;
+  /** Compose build.target, kept only so the plan can say which stage Compose used. */
+  buildTarget?: string;
   command?: string;
   /** Compose `command` as the argument vector for container.command (`$$` and `${VAR}` as written). */
   containerCommand?: string[];

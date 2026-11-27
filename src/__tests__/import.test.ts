@@ -118,6 +118,90 @@ describe("root Compose import", () => {
     expect(readFileSync(file, "utf8")).toBe('{"userOwned":true}\n');
   });
 
+  it("prints the carried volumes, mounts, profile, target, healthcheck and env split", () => {
+    tree({
+      "docker-compose.yml": [
+        "services:",
+        "  db:",
+        "    image: postgres:16",
+        "    environment:",
+        "      POSTGRES_USER: app",
+        "    volumes:",
+        "      - db-data:/var/lib/postgresql/data",
+        "    healthcheck:",
+        "      test: ['CMD', 'pg_isready', '-U', 'app']",
+        "      interval: 2s",
+        "      timeout: 5s",
+        "      retries: 30",
+        "  vote:",
+        "    build:",
+        "      context: ./vote",
+        "      target: dev",
+        "    ports: ['5000', '9229']",
+        "    volumes:",
+        "      - './vote:/app:ro'",
+        "      - './healthchecks:/healthchecks:ro'",
+        "    profiles: [seed]",
+        "    environment:",
+        "      APP_ORIGIN: http://localhost:5000",
+        "      SECRET_TOKEN: super-secret-value",
+        "    depends_on:",
+        "      db:",
+        "        condition: service_healthy",
+        "    healthcheck:",
+        "      test: ['CMD', 'curl', '-f', 'http://localhost:5000/health']",
+        "      interval: 5s",
+        "      timeout: 3s",
+        "      retries: 12",
+        "      start_period: 10s",
+        "volumes:",
+        "  db-data:",
+      ].join("\n"),
+      "vote/Dockerfile": "FROM node:22 AS dev\nFROM node:22 AS prod\n",
+      "healthchecks/check.sh": "#!/bin/sh\nexit 0\n",
+    });
+    const plan = buildPlan(root);
+    const output = formatPlan(plan, planWrites(plan, false)).replaceAll(plan.root, "<root>");
+    expect(output).toMatchInlineSnapshot(`
+      "Found 2 service(s) and 0 job(s) in <root>
+      Read only: docker-compose.yml. Lines below name what was not translated.
+
+        .flisk/project.json  [create Flisk project]
+
+        db  (service)
+          from:      docker-compose.yml [compose]
+          image:     postgres:16
+          port:      5432 (from Compose)
+          proxy:     none, private (5432 is a database or broker port)
+          volumes:   db-data:/var/lib/postgresql/data (named, docker name shop_db-data)
+          healthcheck: ["pg_isready","-U","app"] (interval 2s, timeout 5s, retries 30)
+          env:       POSTGRES_USER (committed params: POSTGRES_USER)
+          write:     services/shop/db/service.json  [create]
+
+        vote  (service, vote/)
+          from:      docker-compose.yml [compose]
+          build:     vote/ with Dockerfile (target dev, not written; final stage built)
+          port:      5000 (from Compose)
+          extraPorts: 9229->9229/tcp
+          proxy:     routed through Traefik
+          volumes:   ./vote:/app (bind, read-only, written as ../../../vote), ./healthchecks:/healthchecks (bind, read-only, written as ../../../healthchecks)
+          health:    /health
+          healthcheck: ["curl","-f","http://localhost:5000/health"] (interval 5s, timeout 3s, retries 12, start period 10s)
+          depends:   db (service_healthy)
+          profiles:  seed
+          env:       APP_ORIGIN, SECRET_TOKEN (committed params: APP_ORIGIN; required secrets: SECRET_TOKEN)
+          write:     services/shop/vote/service.json  [create]
+          note:      healthCheck.command ["curl","-f","http://localhost:5000/health"] is kept as Compose wrote it; Flisk probes with it instead of /health
+          note:      published on 127.0.0.1 only: 9229->9229/tcp
+
+      Skipped / not fully imported:
+        docker-compose.yml [compose]: service "vote" publishes extra container ports (9229); Flisk routes only 5000 and keeps the others published as extraPorts
+        docker-compose.yml [compose]: restart not set for db, vote: Flisk restarts them (unless-stopped), where Compose would not restart them after a crash or a reboot
+      "
+    `);
+    expect(output).not.toContain("super-secret-value");
+  });
+
   it("refuses a missing root docker-compose.yml instead of walking for other inputs", () => {
     tree({
       "nested/docker-compose.yml": compose,
