@@ -46,11 +46,12 @@ export interface Candidate {
   /** Environment variable names. */
   envKeys?: string[];
   /**
-   * Literal values the source states for those names. They go to the project .env (gitignored), never into
-   * service.json; a value that uses Compose interpolation (`${VAR}`) is left out.
+   * Literal values the source states for those names. Plain literals may be committed in service.json `env`;
+   * credential-shaped or high-entropy ones go to the project .env (gitignored). A value that uses Compose
+   * interpolation (`${VAR}`) is left out.
    */
   env?: Record<string, string>;
-  /** Values that are only Compose interpolation (`${VAR}`, `${VAR:-default}`), kept as written for service.json `env`. */
+  /** Values that use Compose interpolation (`${VAR}`, `${VAR:-default}`); the writer commits or secrets them by name and default. */
   envRefs?: Record<string, string>;
   dependsOn?: string[];
   /** Compose depends_on conditions by raw dependency name, when Compose states one (flisk 1.4.28 dependsOn objects). */

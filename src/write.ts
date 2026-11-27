@@ -55,22 +55,20 @@ export interface WritePlan {
 
 /** Secret names the service schema accepts (`secrets.required`). */
 const ENV_NAME = /^[A-Z_][A-Z0-9_]*$/;
-/** Names that may hold a credential whatever their value looks like; these always stay secrets. */
+/** Names that may hold a credential when their value is not already a literal in the Compose file. */
 const CREDENTIAL_NAME =
   /PASS|SECRET|TOKEN|KEY|PRIVATE|CREDENTIAL|AUTH|HMAC|SALT|CERT|SESSION|COOKIE/i;
 
-/**
- * Whether a literal value may hold a credential although its name does not say so: a URL or `user:pass@host` with a
- * user or password, a query parameter named like a credential, a PEM block, a long random-looking token, or a value
- * that says it is one (SECRET, TOKEN, PASSWORD).
- */
+/** A Compose `${VAR}` reference with no default, which a fresh clone must supply. */
+const BARE_COMPOSE_REFERENCE = /\$\{[A-Za-z_][A-Za-z0-9_]*\}/;
+
 /** Query parameters that carry a credential (`?token=`, `?api_key=`, `&sig=`); `authSource` and the like do not. */
 const CREDENTIAL_QUERY =
   /token|secret|pass(word|wd)?$|api[_-]?key|^key$|^sig(nature)?$|access[_-]?key/i;
 
-function looksSecret(value: string): boolean {
+/** Whether a value has the shape or entropy of a real credential, even when it never says so. */
+function hasSecretShape(value: string): boolean {
   if (/^[^\s:@/]+:[^\s@/]+@/.test(value) || value.includes("-----BEGIN")) return true;
-  if (/SECRET|TOKEN|PASSWORD|PASSWD/i.test(value)) return true;
   if (/^[A-Za-z0-9+/_=.-]{32,}$/.test(value) && /[0-9]/.test(value) && /[A-Za-z]/.test(value))
     return true;
   if (!value.includes("://")) return false;
@@ -83,6 +81,10 @@ function looksSecret(value: string): boolean {
   } catch {
     return /:\/\/[^/\s]*@/.test(value);
   }
+}
+
+function looksSecret(value: string): boolean {
+  return hasSecretShape(value) || /SECRET|TOKEN|PASSWORD|PASSWD/i.test(value);
 }
 
 /** `POSTGRES_PASSWORD_FILE=/run/secrets/pg`: the path of a mounted secret file, which is not a secret itself. */
@@ -258,23 +260,33 @@ export function planWrites(plan: ImportPlan, force: boolean): WritePlan {
       notes.push(
         `healthCheck.command ${JSON.stringify(healthCheck.command)} is kept as Compose wrote it; Flisk probes with it instead of ${healthCheckPath}`,
       );
-    // What goes into the committed service.json `env` (Flisk 1.4.24): a pure Compose expression (`${X}`, `${X:-default}`,
-    // `${A:-${B:-file}}`) as it is, whatever its name, since its default is already committed in the Compose file; and
-    // a literal whose name does not look like a credential and whose value does not hold one. Every other name is a
-    // secret: Flisk injects it from the gitignored .env, which gets the literal value.
+    // What goes into the committed service.json `env` (Flisk 1.4.24): a literal already written in the Compose file,
+    // unless that value itself has the shape or entropy of a real credential. Moving a plain literal to a gitignored
+    // file would not protect it, since docker-compose.yml already commits it; it would only break a fresh clone. A
+    // credential-named bare `${VAR}` has no value in the Compose file, so it stays a required secret. Every other
+    // secret-looking name is injected from the gitignored .env, which gets a literal secret-looking value.
     const validNames = service.envKeys.filter((key) => ENV_NAME.test(key));
     const env: Record<string, string> = {};
     for (const key of validNames) {
       const literal = service.env[key];
       const reference = service.envRefs[key];
       if (literal === undefined && reference !== undefined) {
-        // A pure expression is committed whatever its name; one mixed with literal text only when that text, with
-        // the expressions taken out, could not be a credential (`mongodb://${USER}:${PASSWORD:-x}@db/app` can).
+        // A pure expression is committed unless a credential-named key reads a bare `${VAR}`: that value is not
+        // in the Compose file, so the service must require it. A mixed expression is committed only when the literal
+        // text left after taking the expressions out could not be a credential
+        // (`mongodb://${USER}:${PASSWORD:-x}@db/app` can).
         const text = composeTemplateText(reference) ?? "";
-        if (isComposeExpression(reference) || (!CREDENTIAL_NAME.test(key) && !looksSecret(text)))
+        const missingSecret = CREDENTIAL_NAME.test(key) && BARE_COMPOSE_REFERENCE.test(reference);
+        if (
+          !missingSecret &&
+          (isComposeExpression(reference) || (!CREDENTIAL_NAME.test(key) && !looksSecret(text)))
+        )
           env[key] = reference;
       } else if (literal !== undefined && isSecretFilePath(key, literal)) env[key] = literal;
-      else if (literal !== undefined && !CREDENTIAL_NAME.test(key) && !looksSecret(literal))
+      else if (
+        literal !== undefined &&
+        !(CREDENTIAL_NAME.test(key) ? hasSecretShape(literal) : looksSecret(literal))
+      )
         env[key] = literal;
     }
     const referenced = [

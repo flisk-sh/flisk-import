@@ -3,13 +3,13 @@ services:
     image: wordpress:6
     ports: ["8080:80"]
     environment:
-      WORDPRESS_DB_PASSWORD: SECRET_TOKEN_wp
+      WORDPRESS_DB_PASSWORD: SECRET_TOKEN_wp_0123456789abcdef
     depends_on: [db]
     volumes: [wp:/var/www/html]
   db:
     image: mysql:8
     ports: ["3306:3306"]
     environment:
-      MYSQL_ROOT_PASSWORD: SECRET_TOKEN_mysql
+      MYSQL_ROOT_PASSWORD: SECRET_TOKEN_mysql_0123456789abcdef
 volumes:
   wp:
